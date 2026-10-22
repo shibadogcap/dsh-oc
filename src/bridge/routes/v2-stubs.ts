@@ -15,6 +15,7 @@ import type { RouteRegistrar } from '../routes.js'
 import type { BridgeRouteContext } from '../router.js'
 import { badRequest, notFound } from '../errors.js'
 import { externalProviderId } from '../convert/common.js'
+import { applyShell, availableShells, readServerConfig, serverConfigPath } from '../config-store.js'
 import { convertToV2Models } from '../convert/model.js'
 import {
   emptyCredentialEntry,
@@ -53,20 +54,27 @@ export function registerV2StubRoutes(register: RouteRegistrar): void {
   register('GET', '/api/config', 'json', async (_req, ctx) => {
     const fallback = await R.modelCatalogDefault(ctx)
     const agent = ctx.api.agentPresets?.defaultId
-    if (fallback === undefined && agent === undefined) return R.json(200, [])
-    return R.json(200, [{
-      type: 'document',
-      info: {
-        ...(fallback === undefined
-          ? {}
-          : { model: { providerID: externalProviderId(fallback.provider), model: fallback.model } }),
-        ...(agent === undefined ? {} : { default_agent: agent }),
-      },
-    }])
+    const stored = readServerConfig()
+    const info = {
+      ...(fallback === undefined
+        ? {}
+        : { model: { providerID: externalProviderId(fallback.provider), model: fallback.model } }),
+      ...(agent === undefined ? {} : { default_agent: agent }),
+      ...(stored.shell === undefined ? {} : { shell: stored.shell }),
+    }
+    if (Object.keys(info).length === 0) return R.json(200, [])
+    return R.json(200, [{ type: 'document', path: serverConfigPath(), info }])
   })
-  register('PATCH', '/api/config', 'json', async () => R.json(200))
-  register('GET', '/api/config/shell', 'json', async () => R.json(200, []))
-  register('GET', '/api/config/shells', 'json', async () => R.json(200, []))
+  // The client writes `{ shell }`; dsh owns models, agents and permissions, so
+  // this is the only value the bridge stores.
+  register('PATCH', '/api/config', 'json', async (req) => {
+    const body = R.bodyAsRecord(req.body)
+    const result = applyShell('shell' in body ? body.shell : undefined)
+    if (!result.ok) throw badRequest(result.message, { code: 'config/shell-invalid' })
+    return R.json(204)
+  })
+  register('GET', '/api/config/shell', 'json', async () => R.json(200, availableShells()))
+  register('GET', '/api/config/shells', 'json', async () => R.json(200, availableShells()))
 
   // model default — the model dsh uses for a session without a selection
   register('GET', '/api/model/default', 'json', async (_req, ctx) => {
@@ -102,16 +110,12 @@ export function registerV2StubRoutes(register: RouteRegistrar): void {
   register('POST', '/api/form/:formID/reply', 'json', async () => R.json(200))
   register('POST', '/api/form/:formID/cancel', 'json', async () => R.json(200))
 
-  // vcs
-  register('GET', '/api/vcs', 'json', async (_req, ctx) => R.json(200, { location: L(ctx), data: null }))
+  // vcs reads live in routes/vcs.ts; only the write stays here because dsh owns
+  // the working copy.
   register('POST', '/api/vcs/init', 'json', async (_req, ctx) => {
     logStub(ctx, 'POST /api/vcs/init', 'dsh owns the working copy; the bridge cannot create one')
     return R.json(204)
   })
-  register('GET', '/api/vcs/base', 'json', async () => R.json(200, { location: {}, data: null }))
-  register('GET', '/api/vcs/status', 'json', async () => R.json(200, { location: {}, data: [] }))
-  register('GET', '/api/vcs/branch', 'json', async () => R.json(200, { location: {}, data: [] }))
-  register('GET', '/api/vcs/diff', 'json', async () => R.json(200, { location: {}, data: [] }))
 
   // worktree — the 2.1.0 client reads a bare `WorktreeDirectory[]`
   register('GET', '/api/worktree', 'json', async (_req, ctx) => R.json(200, []))

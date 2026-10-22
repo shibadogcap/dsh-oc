@@ -64,6 +64,9 @@
 | dsh multi edit-mode mapping (view/create/str_replace/insert/undo_edit) | ✅ | `src/bridge/convert/tool.ts` maps them to read/edit cards and keeps the mode | `tests/convert/tool.spec.ts`, `e2e-tui-tools.sh` | this commit |
 | Text attachment / file part | ✅ | `src/bridge/router.ts` `filePartToContent`: data URL text and images, local files inside cwd; files outside cwd and binaries get 400 | `tests/bridge-router.spec.ts`, `scripts/e2e-api.sh` | this commit |
 | MCP servers (configured as `mcp-client` plugins in the dsh profile) | ✅ | `/api/mcp` lists the servers whose tools are registered as `mcp__<server>__<tool>` | `tests/bridge-mcp.spec.ts` | — |
+| git state (branch, status, diffs) | ✅ | `src/bridge/vcs.ts` reads git read-only; working mode includes untracked files, branch/committed use the merge base | `tests/bridge-vcs.spec.ts` | — |
+| Provider entries for the integration dialog | ✅ | `/api/integration` lists the providers that have a usable credential; a connect attempt returns 400 | `tests/bridge-integration.spec.ts` | — |
+| Default shell setting | ✅ | `PATCH /api/experimental/config` stores it in `$DSH_HOME/opencode/config/opencode.json`; `GET /api/config/shell` lists the choices | `tests/bridge-config.spec.ts` | — |
 | LSP / formatter and other peripheral tools | ❌ | `src/bridge/stubs.ts` returns schema-valid empty data | `e2e-api.sh` route matrix | `f30b156` |
 
 ## 4. Permissions
@@ -171,7 +174,7 @@
 <!-- FEATURES:AUTO:START -->
 ## Auto-tracked (generated)
 
-> Run `pnpm run features:update` to regenerate. Generated at HEAD: `9b4dd18` (2026-10-22).
+> Run `pnpm run features:update` to regenerate. Generated at HEAD: `37ed71d` (2026-10-22).
 
 ### Route registry
 
@@ -193,14 +196,17 @@ Routes registered by `src/bridge/router.ts` and `src/bridge/stubs.ts`. `/command
 | Test file | Cases | Last updated |
 |---|---|---|
 | `tests/bin.spec.ts` | 5 | 050803b chore(release): bump version to 0.1.0 for first release |
+| `tests/bridge-config.spec.ts` | 4 | — |
 | `tests/bridge-cors.spec.ts` | 6 | 47778b6 feat(bridge): speak the OpenCode 2.1 protocol and serve its web UI |
 | `tests/bridge-errors.spec.ts` | 1 | fd1e411 feat(bridge): integrate dsh 0.1.2 host services |
 | `tests/bridge-events.spec.ts` | 89 | 47778b6 feat(bridge): speak the OpenCode 2.1 protocol and serve its web UI |
 | `tests/bridge-fs.spec.ts` | 5 | 2fc8dea feat(bridge): return extension-aware content types from fs read |
 | `tests/bridge-git.spec.ts` | 1 | 47778b6 feat(bridge): speak the OpenCode 2.1 protocol and serve its web UI |
-| `tests/bridge-mcp.spec.ts` | 3 | — |
+| `tests/bridge-integration.spec.ts` | 3 | — |
+| `tests/bridge-mcp.spec.ts` | 3 | 37ed71d feat: three-language docs, MCP visibility, fork-based usage |
 | `tests/bridge-model.spec.ts` | 5 | 72109b4 fix(bridge): keep the configured model usable and brand the TUI footer |
-| `tests/bridge-router.spec.ts` | 138 | 47778b6 feat(bridge): speak the OpenCode 2.1 protocol and serve its web UI |
+| `tests/bridge-router.spec.ts` | 138 | 37ed71d feat: three-language docs, MCP visibility, fork-based usage |
+| `tests/bridge-vcs.spec.ts` | 6 | — |
 | `tests/bridge-web-ui.spec.ts` | 9 | 47778b6 feat(bridge): speak the OpenCode 2.1 protocol and serve its web UI |
 | `tests/contract/client.spec.ts` | 12 | 47778b6 feat(bridge): speak the OpenCode 2.1 protocol and serve its web UI |
 | `tests/contract/events.spec.ts` | 19 | 47778b6 feat(bridge): speak the OpenCode 2.1 protocol and serve its web UI |
@@ -225,13 +231,14 @@ Routes registered by `src/bridge/router.ts` and `src/bridge/stubs.ts`. `/command
 | `tests/tui/binary.spec.ts` | 18 | 47778b6 feat(bridge): speak the OpenCode 2.1 protocol and serve its web UI |
 | `tests/tui/branding-art.spec.ts` | 3 | 3c3984c feat(tui): generate DSH OC home logo with figlet tooling |
 | `tests/tui/download.spec.ts` | 5 | 47778b6 feat(bridge): speak the OpenCode 2.1 protocol and serve its web UI |
-| `tests/tui/index.spec.ts` | 39 | 47778b6 feat(bridge): speak the OpenCode 2.1 protocol and serve its web UI |
+| `tests/tui/index.spec.ts` | 39 | 37ed71d feat: three-language docs, MCP visibility, fork-based usage |
 | `tests/tui/platform.spec.ts` | 7 | 47778b6 feat(bridge): speak the OpenCode 2.1 protocol and serve its web UI |
 
 ### Key implementation, last updated
 
 | File | Last updated |
 |---|---|
+| `src/bridge/config-store.ts` | — |
 | `src/bridge/convert/common.ts` | 47778b6 feat(bridge): speak the OpenCode 2.1 protocol and serve its web UI |
 | `src/bridge/convert/goal.ts` | 47778b6 feat(bridge): speak the OpenCode 2.1 protocol and serve its web UI |
 | `src/bridge/convert/message.ts` | 47778b6 feat(bridge): speak the OpenCode 2.1 protocol and serve its web UI |
@@ -250,7 +257,7 @@ Routes registered by `src/bridge/router.ts` and `src/bridge/stubs.ts`. `/command
 | `src/bridge/fs.ts` | 2fc8dea feat(bridge): return extension-aware content types from fs read |
 | `src/bridge/git.ts` | 47778b6 feat(bridge): speak the OpenCode 2.1 protocol and serve its web UI |
 | `src/bridge/http.ts` | 47778b6 feat(bridge): speak the OpenCode 2.1 protocol and serve its web UI |
-| `src/bridge/index.ts` | 47778b6 feat(bridge): speak the OpenCode 2.1 protocol and serve its web UI |
+| `src/bridge/index.ts` | 37ed71d feat: three-language docs, MCP visibility, fork-based usage |
 | `src/bridge/router-entry.ts` | 6928f8a feat(bridge): expose router entry and add minimal-server renderer attribution |
 | `src/bridge/router.ts` | 0778b0d fix(bridge): diagnose an empty model catalog; harden the revert e2e |
 | `src/bridge/routes.ts` | 47778b6 feat(bridge): speak the OpenCode 2.1 protocol and serve its web UI |
@@ -260,29 +267,31 @@ Routes registered by `src/bridge/router.ts` and `src/bridge/stubs.ts`. `/command
 | `src/bridge/routes/session-v2.ts` | 72109b4 fix(bridge): keep the configured model usable and brand the TUI footer |
 | `src/bridge/routes/v2-client-compat.ts` | 47778b6 feat(bridge): speak the OpenCode 2.1 protocol and serve its web UI |
 | `src/bridge/routes/v2-shapes.ts` | 47778b6 feat(bridge): speak the OpenCode 2.1 protocol and serve its web UI |
-| `src/bridge/routes/v2-stubs.ts` | 72109b4 fix(bridge): keep the configured model usable and brand the TUI footer |
-| `src/bridge/rpc.ts` | 47778b6 feat(bridge): speak the OpenCode 2.1 protocol and serve its web UI |
+| `src/bridge/routes/v2-stubs.ts` | 37ed71d feat: three-language docs, MCP visibility, fork-based usage |
+| `src/bridge/routes/vcs.ts` | 47778b6 feat(bridge): speak the OpenCode 2.1 protocol and serve its web UI |
+| `src/bridge/rpc.ts` | 37ed71d feat: three-language docs, MCP visibility, fork-based usage |
 | `src/bridge/shell.ts` | 47778b6 feat(bridge): speak the OpenCode 2.1 protocol and serve its web UI |
 | `src/bridge/sse.ts` | 47778b6 feat(bridge): speak the OpenCode 2.1 protocol and serve its web UI |
 | `src/bridge/state.ts` | 0778b0d fix(bridge): diagnose an empty model catalog; harden the revert e2e |
 | `src/bridge/stubs.ts` | c281121 feat(bridge): serve real git info, status and diffs over /vcs |
+| `src/bridge/vcs.ts` | — |
 | `src/bridge/web-ui.ts` | 47778b6 feat(bridge): speak the OpenCode 2.1 protocol and serve its web UI |
-| `src/help.ts` | 47778b6 feat(bridge): speak the OpenCode 2.1 protocol and serve its web UI |
-| `src/index.ts` | 47778b6 feat(bridge): speak the OpenCode 2.1 protocol and serve its web UI |
+| `src/help.ts` | 37ed71d feat: three-language docs, MCP visibility, fork-based usage |
+| `src/index.ts` | 37ed71d feat: three-language docs, MCP visibility, fork-based usage |
 | `src/rewind/index.ts` | 47778b6 feat(bridge): speak the OpenCode 2.1 protocol and serve its web UI |
 | `src/tui/binary.ts` | 47778b6 feat(bridge): speak the OpenCode 2.1 protocol and serve its web UI |
 | `src/tui/brand.ts` | eba383f feat(tui): print DSH OC brand before --mini launches |
 | `src/tui/download.ts` | 47778b6 feat(bridge): speak the OpenCode 2.1 protocol and serve its web UI |
-| `src/tui/index.ts` | 47778b6 feat(bridge): speak the OpenCode 2.1 protocol and serve its web UI |
+| `src/tui/index.ts` | 37ed71d feat: three-language docs, MCP visibility, fork-based usage |
 | `src/tui/node-undici.d.ts` | 81920ee feat(tui): opencode binary resolution, download, spawn and signal handling |
 | `src/tui/platform.ts` | 47778b6 feat(bridge): speak the OpenCode 2.1 protocol and serve its web UI |
 | `src/tui/temp.ts` | fd1e411 feat(bridge): integrate dsh 0.1.2 host services |
 | `src/types.ts` | 153f781 feat(tui): show exit hint for resumed sessions with history, not only new input |
 | `scripts/audit-local-sessions.sh` | fb50dbe fix(perf): write v3 session generation filenames |
 | `scripts/build-replay-corpus.mjs` | 3dc26cf feat(bridge): adapt to dsh 0.1.5 host ABI and assistant stream model |
-| `scripts/check-all.sh` | db87e31 fix(release): verify local dsh-oc resolution |
+| `scripts/check-all.sh` | 37ed71d feat: three-language docs, MCP visibility, fork-based usage |
 | `scripts/check-client-routes.mjs` | 47778b6 feat(bridge): speak the OpenCode 2.1 protocol and serve its web UI |
-| `scripts/check-docs-i18n.mjs` | — |
+| `scripts/check-docs-i18n.mjs` | 37ed71d feat: three-language docs, MCP visibility, fork-based usage |
 | `scripts/cleanup-e2e-runs.sh` | ec31177 chore: add e2e run directory cleanup script |
 | `scripts/cleanup-merged-branches.sh` | 2f1ab51 chore(scripts): enumerate remote merged branches for cleanup |
 | `scripts/e2e-api-attachment.sh` | 47778b6 feat(bridge): speak the OpenCode 2.1 protocol and serve its web UI |
@@ -344,7 +353,7 @@ Routes registered by `src/bridge/router.ts` and `src/bridge/stubs.ts`. `/command
 | `scripts/replay-corpus-manifest.mjs` | fb50dbe fix(perf): write v3 session generation filenames |
 | `scripts/replay-session-audit.sh` | 54c9c31 test(bridge): add reusable real-session replay audit script |
 | `scripts/scan-release-artifact-paths.sh` | f5f016f test(release): harden CI verification |
-| `scripts/update-feature-matrix.mjs` | 8d95367 fix(docs): keep feature matrix generation idempotent |
+| `scripts/update-feature-matrix.mjs` | 37ed71d feat: three-language docs, MCP visibility, fork-based usage |
 | `scripts/update-local-install.sh` | db87e31 fix(release): verify local dsh-oc resolution |
 | `scripts/update-opencode-assets.mjs` | 6ecf354 feat(tui): timestamps, feature matrix and multi-arch binary resolution |
 | `scripts/upgrade-lane.sh` | 81effdd feat(tui): add candidate opencode upgrade lane with golden trace diff |

@@ -129,7 +129,10 @@ Web UI のファイルは opencode バイナリに埋め込まれたリソース
 | テキスト/画像の添付 | ✅（PDF などのバイナリは未対応） |
 | `Allow always` 権限 | 🟡（現在のセッションのメモリ内だけ記憶します） |
 | dsh の profile で設定した MCP サーバー（ツールは `mcp__<server>__<tool>`） | ✅ |
-| LSP / formatter / integration / reference などの周辺ルート | ❌（schema-valid stub） |
+| git の状態: ブランチ表示、変更ファイル、diff ビューア（読み取り専用） | ✅ |
+| integration ダイアログの provider 表示（資格情報は dsh の profile に残る） | ✅ |
+| 既定シェルの設定（`$DSH_HOME/opencode/config` に保存） | ✅ |
+| LSP / formatter / reference などの周辺ルート | ❌（schema-valid stub） |
 
 ## MCP サーバー
 
@@ -195,7 +198,7 @@ dsh --profile oc --dir ~/project --mini
 - `--mini` は TUI branding プラグインを読み込まないため、入口には公式 OpenCode のアスキーアートが残ることがあります。dsh-oc は起動前に DSH OC のブランドを表示します。
 - ストリーミング中のターンでは、完全な TUI も `--mini` も Esc を 2 回続けて押して中断します。dsh-oc はそれを `session.cancel` に変換します。
 - ツールのターンがビジー状態のときは 2 通目のメッセージがキューに入り、公式 TUI の即時トランスクリプトでは順序が一時的にずれることがあります。内容は失われず重複もしません。セッションに入り直すと順序は正しくなります。
-- LSP/formatter/integration/reference などの周辺ルートは現在 schema-valid stub のみを提供し、結果を偽装しません。
+- LSP/formatter/reference などの周辺ルートは現在 schema-valid stub のみを提供し、結果を偽装しません。
 - セッション revert（回退）の境界は排他的です。指定したメッセージとそれ以降のメッセージはコミット時にまとめて破棄され、セッション id は変わりません（コミット後、会話は dsh の fork 上に移ります）。dsh は空の fork を表現できないため、切れ目が最初のメッセージより前にある場合は 400 を返します。ファイル diff は最初と最後の変更行の間の粗い hunk 1 つであり、完全な LCS diff ではありません。
 
 ## トラブルシューティング: profile の分離と dsh-tui

@@ -152,7 +152,10 @@ UI 资产能被服务、官方 OpenCode 2.1.0 客户端能订阅 bridge 的事�
 | 文本/图片附件 | ✅（PDF 等二进制暂不支持） |
 | `Allow always` 权限 | 🟡（仅当前会话内存记忆） |
 | dsh profile 中配置的 MCP 服务器（工具以 `mcp__<server>__<tool>` 出现） | ✅ |
-| LSP / formatter / integration / reference 等外围路由 | ❌（schema-valid stub） |
+| git 状态：分支显示、变更文件、diff 查看器（只读） | ✅ |
+| integration 对话框中的 provider 条目（凭据仍由 dsh profile 持有） | ✅ |
+| 默认 shell 设置，保存在 `$DSH_HOME/opencode/config` 下 | ✅ |
+| LSP / formatter / reference 等外围路由 | ❌（schema-valid stub） |
 
 ## MCP 服务器
 
@@ -231,7 +234,7 @@ dsh --profile oc --dir ~/project --mini
   `session.cancel`。
 - 工具回合在忙碌时排队第二条消息，官方 TUI 的即时转录顺序可能暂时错位；内容
   不丢失、不重复，重新进入会话后顺序正确。
-- LSP/formatter/integration/reference 等外围路由目前只提供 schema-valid stub，
+- LSP/formatter/reference 等外围路由目前只提供 schema-valid stub，
   不伪造结果。
 - 会话回退（revert）的边界是排他的：被指定的消息及其之后的消息在提交时一并丢弃，
   会话 id 保持不变（提交后对话切到 dsh 的 fork 上）。dsh 表达不了空 fork，切点在

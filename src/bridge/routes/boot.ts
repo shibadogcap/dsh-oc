@@ -38,7 +38,10 @@ export function registerBootRoutes(register: RouteRegistrar): void {
     data: await R.skillList(ctx, req.query.get('directory') ?? undefined),
   }))
   register('GET', '/api/reference', 'json', async (_req, ctx) => R.json(200, R.v2LocationBody(ctx)))
-  register('GET', '/api/integration', 'json', async (_req, ctx) => R.json(200, R.v2LocationBody(ctx)))
+  register('GET', '/api/integration', 'json', async (_req, ctx) => R.json(200, {
+    location: R.locationInfo(ctx),
+    data: await R.integrationsForClients(ctx),
+  }))
 
   register('GET', '/api/model', 'json', async (_req, ctx) => {
     const groups = await R.modelGroupsForClients(ctx)

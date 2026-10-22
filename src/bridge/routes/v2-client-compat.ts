@@ -16,8 +16,9 @@
 import * as R from '../router.js'
 import { locationInfo } from '../router.js'
 import type { RouteRegistrar } from '../routes.js'
-import { notFound } from '../errors.js'
+import { badRequest, notFound } from '../errors.js'
 import { convertMessagesV2 } from '../convert/message.js'
+import { applyShell } from '../config-store.js'
 import {
   emptyPersistentPtyInfo,
   emptyPersistentPtyRead,
@@ -251,27 +252,23 @@ export function registerV2ClientCompatRoutes(register: RouteRegistrar): void {
     logStub(ctx, 'POST /api/experimental/integration/wellknown', 'dsh has no integration registry')
     return R.json(204)
   })
-  register('POST', '/api/integration/:integrationID/connect/key', 'json', async (_req, ctx) => {
-    logStub(ctx, 'POST /api/integration/:integrationID/connect/key', 'dsh has no integration registry')
-    return R.json(204)
-  })
-  register('POST', '/api/integration/:integrationID/connect/external', 'json', async (_req, ctx) => {
-    logStub(ctx, 'POST /api/integration/:integrationID/connect/external', 'dsh has no integration registry')
-    return R.json(204)
-  })
-  register('POST', '/api/integration/:integrationID/connect/oauth', 'json', async (req, ctx) => {
-    logStub(ctx, 'POST /api/integration/:integrationID/connect/oauth', 'dsh has no integration registry; no oauth attempt is started')
-    return R.json(200, {
-      location: L(ctx),
-      data: {
-        attemptID: `attempt_${randomUUID()}`,
-        url: '',
-        instructions: '',
-        mode: 'code',
-        time: { created: Date.now(), expires: 0 },
-      },
-    })
-  })
+  // Provider credentials are profile configuration. The dialog lists the
+  // configured providers as informational rows, so a connect attempt means a
+  // client bypassed the UI: say where the change belongs instead of returning
+  // a success that would change nothing.
+  const integrationProfileOnly = (ctx: Pick<R.BridgeRouteContext, 'log'>, route: string): never => {
+    const message = 'Provider credentials are configured in the dsh profile; '
+      + 'the bridge cannot connect a provider at runtime. Set the provider\'s API key in the '
+      + "profile (cordis.patch.yml + the credential store) and restart dsh."
+    logStub(ctx, route, message)
+    throw badRequest(message, { code: 'integration/profile-configured' })
+  }
+  register('POST', '/api/integration/:integrationID/connect/key', 'json', async (_req, ctx) =>
+    integrationProfileOnly(ctx, 'POST /api/integration/:integrationID/connect/key'))
+  register('POST', '/api/integration/:integrationID/connect/external', 'json', async (_req, ctx) =>
+    integrationProfileOnly(ctx, 'POST /api/integration/:integrationID/connect/external'))
+  register('POST', '/api/integration/:integrationID/connect/oauth', 'json', async (_req, ctx) =>
+    integrationProfileOnly(ctx, 'POST /api/integration/:integrationID/connect/oauth'))
   register('GET', '/api/integration/:integrationID/connect/oauth/:attemptID', 'json', async (_req, ctx) => {
     logStub(ctx, 'GET /api/integration/:integrationID/connect/oauth/:attemptID', 'dsh has no integration registry; no oauth attempt is alive')
     return R.json(200, {
@@ -287,13 +284,8 @@ export function registerV2ClientCompatRoutes(register: RouteRegistrar): void {
     logStub(ctx, 'DELETE /api/integration/:integrationID/connect/oauth/:attemptID', 'dsh has no integration registry')
     return R.json(204)
   })
-  register('POST', '/api/integration/:integrationID/connect/command', 'json', async (req, ctx) => {
-    logStub(ctx, 'POST /api/integration/:integrationID/connect/command', 'dsh has no integration registry; no command attempt is started')
-    return R.json(200, {
-      location: L(ctx),
-      data: { attemptID: `attempt_${randomUUID()}`, time: { created: Date.now(), expires: 0 } },
-    })
-  })
+  register('POST', '/api/integration/:integrationID/connect/command', 'json', async (_req, ctx) =>
+    integrationProfileOnly(ctx, 'POST /api/integration/:integrationID/connect/command'))
   register('GET', '/api/integration/:integrationID/connect/command/:attemptID', 'json', async (_req, ctx) => {
     logStub(ctx, 'GET /api/integration/:integrationID/connect/command/:attemptID', 'dsh has no integration registry; no command attempt is alive')
     return R.json(200, {
@@ -331,8 +323,10 @@ export function registerV2ClientCompatRoutes(register: RouteRegistrar): void {
   })
 
   // ---- config update (dsh-oc config is derived from the dsh deployment) ----
-  register('PATCH', '/api/experimental/config', 'json', async (_req, ctx) => {
-    logStub(ctx, 'PATCH /api/experimental/config', 'dsh-oc has no writable config file; the shell setting is ignored')
+  register('PATCH', '/api/experimental/config', 'json', async (req) => {
+    const body = R.bodyAsRecord(req.body)
+    const result = applyShell('shell' in body ? body.shell : undefined)
+    if (!result.ok) throw badRequest(result.message, { code: 'config/shell-invalid' })
     return R.json(204)
   })
 }

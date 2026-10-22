@@ -209,7 +209,16 @@ compaction，dsh 可能摘要或丢弃逐字原文，因此不保证压缩后仍
 | `GET /api/project/{projectID}` | MAP | 裸 `Project`；id 不匹配 404 |
 | `PATCH /api/project/{projectID}` | MAP | 裸 `Project`（当前只回显，不落盘）；id 不匹配 404 |
 | `GET /api/agent` | STUB/LATER | `[]` |
-| `GET /api/integration` | STUB | `[]` |
+| `GET /api/integration` | MAP | 每个有可用凭据的 provider 一条（`methods: []` 与 env 连接）；一个都没有时返回一条说明 profile 的提示 |
+| `POST /api/integration/{id}/connect/*` | REJECT | 400 `integration/profile-configured`，凭据在 dsh profile 中 |
+| `GET /api/vcs` | MAP | `{ provider: "git", branch: { current, default } }`；不在 worktree 内为 `null` |
+| `GET /api/vcs/base` | MAP | 与默认分支的 merge base（`source: "default"`），否则用首个 commit |
+| `GET /api/vcs/status` | MAP | `git status --porcelain` 配合 `git diff --numstat HEAD` 的行数 |
+| `GET /api/vcs/branch` | MAP | 本地分支（`git branch --format=%(refname:short)`） |
+| `GET /api/vcs/diff` | MAP | `mode=working` 用 `git diff HEAD` 并把未跟踪文件作为新增补丁；`branch`/`committed` 对 merge base 取差；最多 200 个文件 |
+| `GET /api/config` | MAP | 一份文档：dsh 的模型与默认 agent，以及已保存的 `shell` |
+| `GET /api/config/shell` | MAP | `/etc/shells` 与 `$SHELL`，返回 `{ path, name, acceptable }` |
+| `PATCH /api/experimental/config` | MAP | 把 `{ shell }` 存入 `$DSH_HOME/opencode/config/opencode.json`（204）；无法运行的 shell 返回 400 |
 | `GET /api/model` | MAP | `sessionController.modelCatalog` |
 | `GET /api/provider` | MAP | `sessionController.modelCatalog` providers |
 | `GET /api/provider/{id}` | MAP | 单 provider `{ location, data: ProviderV2Info }`；未找到 404 |

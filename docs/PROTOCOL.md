@@ -209,7 +209,16 @@ If the Agent already has a turn/maintenance, the endpoint returns 409; if the se
 | `GET /api/project/{projectID}` | MAP | bare `Project`; id mismatch 404 |
 | `PATCH /api/project/{projectID}` | MAP | bare `Project` (currently only echoes back, no persistence); id mismatch 404 |
 | `GET /api/agent` | STUB/LATER | `[]` |
-| `GET /api/integration` | STUB | `[]` |
+| `GET /api/integration` | MAP | one entry per provider with a usable credential (`methods: []`, an env connection); a hint entry when none, so the dialog can explain the profile |
+| `POST /api/integration/{id}/connect/*` | REJECT | 400 `integration/profile-configured`: credentials live in the dsh profile |
+| `GET /api/vcs` | MAP | `{ provider: "git", branch: { current, default } }`, `null` outside a worktree |
+| `GET /api/vcs/base` | MAP | merge base with the default branch (`source: "default"`), first commit otherwise |
+| `GET /api/vcs/status` | MAP | `git status --porcelain` with `git diff --numstat HEAD` counts |
+| `GET /api/vcs/branch` | MAP | local branches (`git branch --format=%(refname:short)`) |
+| `GET /api/vcs/diff` | MAP | `mode=working` (`git diff HEAD`, untracked files as added patches), `branch`/`committed` against the merge base; capped at 200 files |
+| `GET /api/config` | MAP | one document: dsh model + default agent, plus the stored `shell` |
+| `GET /api/config/shell` | MAP | `/etc/shells` plus `$SHELL` as `{ path, name, acceptable }` |
+| `PATCH /api/experimental/config` | MAP | stores `{ shell }` in `$DSH_HOME/opencode/config/opencode.json` (204); a shell that cannot run is 400 |
 | `GET /api/model` | MAP | `sessionController.modelCatalog` |
 | `GET /api/provider` | MAP | `sessionController.modelCatalog` providers |
 | `GET /api/provider/{id}` | MAP | single provider `{ location, data: ProviderV2Info }`; 404 when not found |

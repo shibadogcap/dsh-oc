@@ -209,7 +209,16 @@ Agent にすでに turn/maintenance がある場合は 409、session が存在�
 | `GET /api/project/{projectID}` | MAP | 裸の `Project`。id が一致しない場合は 404 |
 | `PATCH /api/project/{projectID}` | MAP | 裸の `Project`（現在はエコーバックのみで、永続化しない）。id が一致しない場合は 404 |
 | `GET /api/agent` | STUB/LATER | `[]` |
-| `GET /api/integration` | STUB | `[]` |
+| `GET /api/integration` | MAP | 資格情報のある provider ごとに 1 件（`methods: []` と env 接続）。無いときは profile を説明する案内 1 件 |
+| `POST /api/integration/{id}/connect/*` | REJECT | 400 `integration/profile-configured`。資格情報は dsh の profile にあります |
+| `GET /api/vcs` | MAP | `{ provider: "git", branch: { current, default } }`。worktree の外では `null` |
+| `GET /api/vcs/base` | MAP | 既定ブランチとの merge base（`source: "default"`）。無ければ最初の commit |
+| `GET /api/vcs/status` | MAP | `git status --porcelain` と `git diff --numstat HEAD` の行数 |
+| `GET /api/vcs/branch` | MAP | ローカルブランチ（`git branch --format=%(refname:short)`） |
+| `GET /api/vcs/diff` | MAP | `mode=working` は `git diff HEAD` と未追跡ファイルの追加パッチ、`branch`/`committed` は merge base との差分。200 ファイルまで |
+| `GET /api/config` | MAP | 1 件のドキュメント。dsh のモデルと既定 agent、保存済みの `shell` |
+| `GET /api/config/shell` | MAP | `/etc/shells` と `$SHELL` を `{ path, name, acceptable }` で返す |
+| `PATCH /api/experimental/config` | MAP | `{ shell }` を `$DSH_HOME/opencode/config/opencode.json` に保存（204）。実行できない shell は 400 |
 | `GET /api/model` | MAP | `sessionController.modelCatalog` |
 | `GET /api/provider` | MAP | `sessionController.modelCatalog` の providers |
 | `GET /api/provider/{id}` | MAP | 単一 provider `{ location, data: ProviderV2Info }`。見つからない場合は 404 |

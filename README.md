@@ -169,7 +169,10 @@ served, and the official OpenCode 2.1.0 client can subscribe to the bridge event
 | Text/image attachments | ✅ (binaries such as PDF are not supported yet) |
 | `Allow always` permission | 🟡 (remembered in memory for the current session only) |
 | MCP servers configured in the dsh profile (tools appear as `mcp__<server>__<tool>`) | ✅ |
-| Peripheral routes such as LSP / formatter / integration / reference | ❌ (schema-valid stub) |
+| git state: branch label, changed files, diff viewer (read-only) | ✅ |
+| Provider entries in the integration dialog (credentials stay in the dsh profile) | ✅ |
+| Default shell setting, persisted under `$DSH_HOME/opencode/config` | ✅ |
+| Peripheral routes such as LSP / formatter / reference | ❌ (schema-valid stub) |
 
 ## MCP servers
 
@@ -261,7 +264,7 @@ dropped silently.
 - While a tool turn is busy, a second message is queued and the official TUI's immediate
   transcript order may be temporarily off; content is neither lost nor duplicated, and the
   order is correct after you re-enter the session.
-- Peripheral routes such as LSP/formatter/integration/reference currently provide only
+- Peripheral routes such as LSP/formatter/reference currently provide only
   schema-valid stubs and do not fake results.
 - The session revert boundary is exclusive: the specified message and every message after
   it are discarded together at commit, and the session id stays the same (after the commit

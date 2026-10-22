@@ -961,6 +961,47 @@ export async function modelGroupsForClients(ctx: BridgeRouteContext): Promise<Mo
   }]
 }
 
+/** One provider entry the OpenCode integration dialog can list. */
+export interface ClientIntegrationInfo {
+  id: string
+  name: string
+  metadata?: Record<string, unknown>
+  methods: Array<Record<string, unknown>>
+  connections: Array<Record<string, unknown>>
+}
+
+/**
+ * Provider entries for the OpenCode integration dialog.
+ *
+ * dsh keeps provider credentials in its own profile, so there is nothing to
+ * connect from that dialog. Publishing the providers that already have a
+ * credential fixes two visible problems: the sidebar's "Connect provider"
+ * onboarding stops appearing (it keys off `connections.length`), and the dialog
+ * says where the credential lives instead of showing an empty list.
+ *
+ * The rows carry no connect method, so the dialog renders them disabled; the
+ * connect routes explain that the profile owns the change.
+ */
+export async function integrationsForClients(ctx: BridgeRouteContext): Promise<ClientIntegrationInfo[]> {
+  const groups = await modelGroups(ctx)
+  if (groups.length === 0) {
+    return [{
+      id: 'dsh-profile',
+      name: 'Configure a provider in the dsh profile',
+      metadata: { source: 'dsh-profile' },
+      methods: [],
+      connections: [],
+    }]
+  }
+  return groups.map((group) => ({
+    id: `dsh-profile-${group.id}`,
+    name: `${group.name} (dsh profile)`,
+    metadata: { source: 'dsh-profile', provider: group.id },
+    methods: [],
+    connections: [{ type: 'env', name: 'DSH_PROFILE' }],
+  }))
+}
+
 /** Log the empty-catalog diagnosis once per bridge run. */
 function warnEmptyCatalogOnce(
   ctx: BridgeRouteContext,
