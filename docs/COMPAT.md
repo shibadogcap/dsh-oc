@@ -200,3 +200,19 @@ pnpm add @deepseek-ai/dsh-llm-pi-ai@0.2.1-rc.2 \
 
 確認は `/api/model` の件数、`/api/model/default` の `id`、TUI ホーム下部の
 `Minimal · <モデル名> <provider>` 表示。
+
+### GitHub 源の更新
+
+```bash
+dsh plugin --profile oc add 'github:<owner>/dsh-oc#<branch>'
+```
+
+pnpm 12 は同じ ref の解決を再利用し、「Lockfile is up to date」で終わって古い
+commit のままになることがある。その場合は profile で `pnpm update` を実行し、
+`pnpm-lock.yaml` の `tar.gz/<sha>` が新しい commit を指すことを確認する:
+
+```bash
+cd ~/.dsh/profiles/oc
+pnpm update @chiro2001/dsh-oc
+rg -o 'dsh-oc/tar.gz/[a-f0-9]+' pnpm-lock.yaml | head -1
+```
