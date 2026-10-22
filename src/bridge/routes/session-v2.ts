@@ -410,7 +410,23 @@ export function registerSessionV2Routes(register: RouteRegistrar): void {
 
   register('POST', '/api/session/:sessionID/model', 'json', async (req, ctx) => {
     const id = req.params.sessionID as string
-    await R.applyModelSelection(ctx, id, req.body)
+    try {
+      await R.applyModelSelection(ctx, id, req.body)
+    } catch (error) {
+      // dsh only lists a provider's models once it has a usable credential.
+      // "Select an available model" alone does not say what to fix, so the
+      // missing credential is named here.
+      const message = error instanceof Error ? error.message : String(error)
+      if (/model-unavailable|Select an available model/i.test(message)) {
+        throw badRequest(
+          `model is not available: ${message} `
+          + 'The provider has no usable credential; set its API key (for the DeepSeek route, DEEPSEEK_API_KEY) '
+          + 'and restart dsh.',
+          { code: 'session/model-unavailable', sessionID: id },
+        )
+      }
+      throw error
+    }
     return R.json(204)
   })
 

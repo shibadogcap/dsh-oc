@@ -13,6 +13,8 @@ import * as R from '../router.js'
 import { locationInfo } from '../router.js'
 import type { RouteRegistrar } from '../routes.js'
 import { notFound } from '../errors.js'
+import { externalProviderId } from '../convert/common.js'
+import { convertToV2Models } from '../convert/model.js'
 import {
   emptyCredentialEntry,
   emptyIntegrationInfo,
@@ -44,14 +46,37 @@ export function registerV2StubRoutes(register: RouteRegistrar): void {
     return R.json(200, project)
   })
 
-  // config — the 2.1.0 client reads a bare `ConfigEntry[]`
-  register('GET', '/api/config', 'json', async () => R.json(200, []))
+  // config — the 2.1.0 client reads a bare `ConfigEntry[]`. The TUI takes its
+  // default model and agent from the document entry, so the deployment
+  // selection is published here instead of an empty list.
+  register('GET', '/api/config', 'json', async (_req, ctx) => {
+    const fallback = await R.modelCatalogDefault(ctx)
+    const agent = ctx.api.agentPresets?.defaultId
+    if (fallback === undefined && agent === undefined) return R.json(200, [])
+    return R.json(200, [{
+      type: 'document',
+      info: {
+        ...(fallback === undefined
+          ? {}
+          : { model: { providerID: externalProviderId(fallback.provider), model: fallback.model } }),
+        ...(agent === undefined ? {} : { default_agent: agent }),
+      },
+    }])
+  })
   register('PATCH', '/api/config', 'json', async () => R.json(200))
   register('GET', '/api/config/shell', 'json', async () => R.json(200, []))
   register('GET', '/api/config/shells', 'json', async () => R.json(200, []))
 
-  // model default
-  register('GET', '/api/model/default', 'json', async (_req, ctx) => R.json(200, { location: L(ctx), data: null }))
+  // model default — the model dsh uses for a session without a selection
+  register('GET', '/api/model/default', 'json', async (_req, ctx) => {
+    const fallback = await R.modelCatalogDefault(ctx)
+    if (fallback === undefined) return R.json(200, { location: L(ctx), data: null })
+    const groups = await R.modelGroupsForClients(ctx)
+    const models = convertToV2Models(groups)
+    const model = models.find((item) =>
+      item.providerID === externalProviderId(fallback.provider) && item.id === fallback.model)
+    return R.json(200, { location: L(ctx), data: model ?? null })
+  })
 
   // session active
   register('GET', '/api/session/active', 'json', async (_req, ctx) => {

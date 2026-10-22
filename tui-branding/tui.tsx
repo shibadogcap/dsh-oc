@@ -1,53 +1,52 @@
+/**
+ * dsh-oc branding for the OpenCode TUI.
+ *
+ * The 2.1.0 TUI exposes its slot tree at `context.ui.slot`. It has no slot for
+ * the home logo itself (the TUI renders its own), so the branding mark goes
+ * into the home footer: a compact DSH ⨯ OC mark with the subtitle.
+ */
 /** @jsxImportSource @opentui/solid */
-import type { TuiPlugin, TuiPluginModule, TuiThemeCurrent } from "@opencode-ai/plugin/tui"
-import { DSH, OC } from "./art"
 
-const GAP = "   "
+interface ThemeTokens {
+  readonly text: {
+    readonly base: unknown
+    readonly muted: unknown
+    readonly faint: unknown
+    readonly feedback: Record<string, { readonly base: unknown; readonly muted: unknown }>
+  }
+}
+
+interface TuiPluginApi {
+  readonly theme: ThemeTokens
+  readonly ui: {
+    slot: (claim: {
+      append: string
+      render: (input: Record<string, never>) => unknown
+    }) => () => void
+  }
+}
+
 const SUBTITLE = "DeepSeek Harness × OpenCode TUI"
 
-function HomeLogo(props: { theme: TuiThemeCurrent }) {
-  const dshColor = props.theme.info
-  const ocColor = props.theme.text
-  const muted = props.theme.textMuted
-
-  return (
-    <box flexDirection="column" alignItems="center">
-      <box flexDirection="row">
-        <box flexDirection="column">
-          {DSH.map((line) => (
-            <text fg={dshColor}>{line}</text>
-          ))}
-        </box>
-        <box flexDirection="column">
-          {DSH.map(() => (
-            <text fg={muted}>{GAP}</text>
-          ))}
-        </box>
-        <box flexDirection="column">
-          {OC.map((line) => (
-            <text fg={ocColor} bold>{line}</text>
-          ))}
-        </box>
-      </box>
-      <text fg={muted}>{SUBTITLE}</text>
-    </box>
-  )
-}
-
-const tui: TuiPlugin = async (api) => {
-  api.slots.register({
-    mode: "replace",
-    slots: {
-      home_logo(ctx) {
-        return <HomeLogo theme={ctx.theme.current} />
-      },
-    },
-  })
-}
-
-const plugin: TuiPluginModule & { id: string } = {
+export default {
   id: "dsh-oc-logo",
-  tui,
+  setup(api: TuiPluginApi): void {
+    api.ui.slot({
+      append: "home.footer",
+      render: () => {
+        const theme = api.theme
+        const accent = theme.text.feedback.info?.base ?? theme.text.base
+        return (
+          <box flexDirection="column" alignItems="center" paddingTop={1} flexShrink={0}>
+            <box flexDirection="row" gap={1}>
+              <text fg={theme.text.base} bold>DSH</text>
+              <text fg={theme.text.faint}>⨯</text>
+              <text fg={accent} bold>OC</text>
+            </box>
+            <text fg={theme.text.muted}>{SUBTITLE}</text>
+          </box>
+        )
+      },
+    })
+  },
 }
-
-export default plugin

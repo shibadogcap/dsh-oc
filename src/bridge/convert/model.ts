@@ -29,12 +29,33 @@ function limitFor(groupId: string, modelId: string) {
 }
 
 /**
+ * A readable name for a model id, when the provider gives none.
+ *
+ * `deepseek-flash` → `DeepSeek Flash`, `deepseek-v4.1-flash` →
+ * `DeepSeek V4.1 Flash`.
+ */
+export function displayModelName(modelId: string): string {
+  const words = modelId.split(/[-_\s]+/).filter((word) => word.length > 0)
+  if (words.length === 0) return modelId
+  return words
+    .map((word) => word.toLowerCase() === 'deepseek'
+      ? 'DeepSeek'
+      : `${word.charAt(0).toUpperCase()}${word.slice(1)}`)
+    .join(' ')
+}
+
+/**
  * Match opencode's DeepSeek naming for the official dsh route:
  * `DeepSeek-V4-Flash` → `DeepSeek V4 Flash`.
+ *
+ * Without a catalog name (a provider with no credential lists no models, so
+ * the bridge publishes the configured default) the id is made readable.
  */
 function modelNameFor(groupId: string, modelId: string, modelName?: string) {
-  if (groupId === 'deepseek-official') return (modelName ?? modelId).replaceAll('-', ' ')
-  return modelName ?? modelId
+  if (modelName === undefined) return displayModelName(modelId)
+  // dsh names the DeepSeek models `DeepSeek-V4.1-Flash`; opencode shows
+  // `DeepSeek V4.1 Flash`.
+  return groupId === 'deepseek-official' ? modelName.replaceAll('-', ' ') : modelName
 }
 
 function v2VariantsFor(model: ModelCatalogModel): ClientModelInfo['variants'] {

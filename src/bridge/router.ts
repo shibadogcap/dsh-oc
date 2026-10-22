@@ -43,6 +43,7 @@ import type { WireMessageEntry } from './convert/wire.js'
 import {
   convertToV2Models,
   convertToV2Providers,
+  displayModelName,
 } from './convert/model.js'
 import { toPermissionV2 } from './convert/permission.js'
 import { answersToDsh, toFormAnswer, toQuestionV2 } from './convert/question.js'
@@ -58,7 +59,7 @@ import {
 } from './convert/tool.js'
 import { agentErrorEvents, commandResultMessage, convertProducedFiles, makeEvent, makeV2Event, mapEventSessionId, toFileDiffInfos } from './events.js'
 import { filterGitTrackedDiffs } from './git.js'
-import { DEFAULT_AGENT, dshProviderId, externalProviderId, OPENCODE_VERSION, projectIdFor, safeJsonParse } from './convert/common.js'
+import { DEFAULT_AGENT, dshProviderId, externalProviderId, externalProviderName, OPENCODE_VERSION, projectIdFor, safeJsonParse } from './convert/common.js'
 import { ocHelp } from '../help.js'
 import {
   InteractionState,
@@ -902,6 +903,54 @@ export function publishV2Event(
 export async function modelGroups(ctx: BridgeRouteContext) {
   const catalog = await rpc<{ groups: ModelProviderGroup[] }>(ctx, 'llm.models', {})
   return catalog.groups
+}
+
+/** The model dsh uses for a session that has no explicit selection. */
+export async function modelCatalogDefault(
+  ctx: BridgeRouteContext,
+): Promise<{ provider: string; model: string; reasoningEffort?: string } | undefined> {
+  try {
+    const catalog = await rpc<{
+      default?: { provider?: unknown; model?: unknown; reasoningEffort?: unknown }
+    }>(ctx, 'llm.models', {})
+    const provider = catalog.default?.provider
+    const model = catalog.default?.model
+    if (typeof provider !== 'string' || typeof model !== 'string') return undefined
+    return {
+      provider,
+      model,
+      ...(typeof catalog.default?.reasoningEffort === 'string'
+        ? { reasoningEffort: catalog.default.reasoningEffort }
+        : {}),
+    }
+  } catch (error) {
+    ctx.log(`[bridge/model] default selection unavailable: ${error instanceof Error ? error.message : String(error)}`)
+    return undefined
+  }
+}
+
+/**
+ * The model catalog the OpenCode clients read, with the configured default
+ * standing in when dsh reports no catalog group.
+ *
+ * dsh only lists a provider's models once the provider has a usable
+ * credential. Without one the catalog is empty, and a client that resolves its
+ * model against that catalog (the TUI does) has nothing to select: it shows
+ * "No provider selected" and offers the OpenCode integration flow, which dsh
+ * does not use. Publishing the configured default keeps the model visible;
+ * the missing credential then surfaces on the first prompt instead of hiding
+ * the model entirely.
+ */
+export async function modelGroupsForClients(ctx: BridgeRouteContext): Promise<ModelProviderGroup[]> {
+  const groups = await modelGroups(ctx)
+  if (groups.length > 0) return groups
+  const fallback = await modelCatalogDefault(ctx)
+  if (fallback === undefined) return groups
+  return [{
+    id: fallback.provider,
+    name: externalProviderName(fallback.provider),
+    models: [{ id: fallback.model, name: displayModelName(fallback.model) }],
+  }]
 }
 
 interface PromptPartInput {
@@ -2255,7 +2304,17 @@ export async function createSession(
     }
   }
   if (body.model !== undefined) {
-    await applyModelSelection(ctx, id, body)
+    // The TUI sends the composer's current selection on every create. A model
+    // the deployment cannot route yet (a provider with no credential) must not
+    // fail the create: the session still opens on the deployment default, and
+    // the prompt is where the real problem is reported.
+    try {
+      await applyModelSelection(ctx, id, body)
+    } catch (error) {
+      ctx.log(
+        `[bridge] model selection on create failed for ${id}: ${error instanceof Error ? error.message : String(error)}`,
+      )
+    }
   }
   if (agentName !== undefined) {
     ctx.state.lastAgentPreset = agentName
