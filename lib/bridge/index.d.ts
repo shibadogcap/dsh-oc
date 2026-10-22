@@ -27,6 +27,19 @@ interface OcBridgeValue {
   exitNoteNeeded(): Promise<boolean>;
 }
 /**
+ * MCP servers dsh has connected, read from the shared tool registry.
+ *
+ * dsh's `mcp-client` registers each server's tools as
+ * `mcp__<server>__<tool>`, so a server with no registered tools is not live:
+ * disconnected, failed before its first sync, or never configured. That makes
+ * the registry the honest source for the OpenCode MCP panel, which only needs
+ * names and a status.
+ */
+declare function mcpServersFromTools(ctx: Context): Array<{
+  name: string;
+  tools: string[];
+}>;
+/**
  * oc-bridge cordis service: owns the loopback HTTP/SSE server and exposes
  * `{ url, port }` once the listener is ready. `Service.init` starts the
  * server before the service becomes injectable, and yields the teardown
@@ -60,5 +73,5 @@ declare class OcBridgeService extends Service implements OcBridgeValue {
   private broadcastPendingUiCleanup;
 }
 //#endregion
-export { OcBridgeService, OcBridgeService as default, OcBridgeValue, inject, installSessionEventsCompat, installSessionEventsOnLiveSessions, name };
+export { OcBridgeService, OcBridgeService as default, OcBridgeValue, inject, installSessionEventsCompat, installSessionEventsOnLiveSessions, mcpServersFromTools, name };
 //# sourceMappingURL=index.d.ts.map

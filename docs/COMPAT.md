@@ -1,36 +1,38 @@
-# 互換性マトリクス
+*English · [日本語](COMPAT.ja.md)*
 
-## 三つの更新軸
+# Compatibility matrix
 
-| 軸 | 現在の目標 | 隔離する場所 | 差分の検出 |
+## The three upgrade axes
+
+| Axis | Current target | Where it is isolated | How the diff is detected |
 | --- | --- | --- | --- |
-| dsh | 0.2.1-rc.2 | `src/bridge/` の dsh 依存部 | `engines.dsh`、型検査、機能検出、dsh@next の互換テスト |
-| OpenCode | 2.1.0 | `src/bridge/convert/`、`src/bridge/routes/` | 生成型、ルート表の照合、契約テスト |
-| OpenChamber | 2.5 系 | `tests/e2e/` | 公開クライアントと reducer の契約テスト、起動記録 |
+| dsh | 0.2.1-rc.2 | the dsh-dependent parts of `src/bridge/` | `engines.dsh`, typecheck, feature detection, the dsh@next compatibility test |
+| OpenCode | 2.1.0 | `src/bridge/convert/`, `src/bridge/routes/` | generated types, route table comparison, contract tests |
+| OpenChamber | 2.5.x | `tests/e2e/` | contract tests for the public client and the reducer, startup records |
 
-## 対応マトリクス
+## Supported combinations
 
-| 組み合わせ | 状態 |
+| Combination | Status |
 | --- | --- |
-| dsh 0.2.1-rc.2 + OpenCode 2.1.0 + OpenChamber 2.5.x | リリースの門番 |
-| dsh next + OpenCode latest + OpenChamber main | 毎晩の先行検出 |
+| dsh 0.2.1-rc.2 + OpenCode 2.1.0 + OpenChamber 2.5.x | release gate |
+| dsh next + OpenCode latest + OpenChamber main | nightly early detection |
 
-## OpenCode を上げる手順
+## Upgrade procedure for OpenCode
 
-公式クライアントが呼ぶルートは増減する。差分は自動で検出されるので、手順は次の
-6 步。
+The routes the official client calls come and go. The diff is detected automatically, so the
+procedure has six steps.
 
-### 1. 差分を見る
+### 1. Look at the diff
 
 ```bash
-# 新しい client 取出
-npm pack @opencode/client@<新バージョン>
-tar -xzf opencode-client-<新バージョン>.tgz
+# extract the new client
+npm pack @opencode/client@<new-version>
+tar -xzf opencode-client-<new-version>.tgz
 
-# ルート表の差分
+# diff the route table
 node -e "
 const fs=require('fs');
-const dir='<展開先>/package/dist/chunks';
+const dir='<extract-dir>/package/dist/chunks';
 let best='',bestn=0;
 for(const f of fs.readdirSync(dir).filter(x=>x.endsWith('.js'))){
   const s=fs.readFileSync(dir+'/'+f,'utf8');
@@ -44,24 +46,23 @@ console.log(out.join('\n'));
 "
 ```
 
-2025-11 時点の実際の差分（2.0.32 → 2.1.0）は、ルート 1 本の追加
-（`PATCH /api/permission/saved/:id`）だけだった。型は
-`SessionMessageProviderState` が `SessionMessageNative` に改名され、
-`session.archived` / `session.unarchived` のイベント型が追加された。
+As of 2025-11 the actual diff (2.0.32 → 2.1.0) was a single added route
+(`PATCH /api/permission/saved/:id`). In the types, `SessionMessageProviderState` was renamed to
+`SessionMessageNative`, and the `session.archived` / `session.unarchived` event types were added.
 
-### 2. バージョンを固定する
+### 2. Pin the version
 
 ```bash
-# package.json: @opencode/client を新バージョンへ
-# opencode-version.json: version と npm を新バージョンへ
-# src/bridge/convert/common.ts と src/index.ts: OPENCODE_VERSION
+# package.json: move @opencode/client to the new version
+# opencode-version.json: move version and npm to the new version
+# src/bridge/convert/common.ts and src/index.ts: OPENCODE_VERSION
 pnpm install
 ```
 
-### 3. ルート表と探針基準を更新する
+### 3. Update the route table and the probe baseline
 
 ```bash
-# 新しい client から基準を録る
+# record the baseline from the new client
 node -e "
 const fs=require('fs');
 const dir='node_modules/@opencode/client/dist/chunks';
@@ -82,91 +83,92 @@ while((m=re.exec(best))!==null){
   routes.push({method,path,kind});
 }
 fs.writeFileSync('tests/fixtures/opencode/routes.json', JSON.stringify({
-  version:'<新バージョン>',
-  comment:'@opencode/client@<新バージョン> のルート表。',
+  version:'<new-version>',
+  comment:'Route table of @opencode/client@<new-version>.',
   routes,
 },null,2)+'\n');
 "
 ```
 
-### 4. 足りないルートを実装する
+### 4. Implement the missing routes
 
 ```bash
-node scripts/check-client-routes.mjs   # missing: 0 になるまで実装
+node scripts/check-client-routes.mjs   # implement until missing: 0
 ```
 
-`missing` に出たルートだけを `src/bridge/routes/` の該当ドメインへ足す。
+Add only the routes listed under `missing` to the matching domain in `src/bridge/routes/`.
 
-### 5. 型とテストを合わせる
+### 5. Align types and tests
 
 ```bash
 pnpm typecheck
 pnpm test
 ```
 
-### 6. 実物で確かめる
+### 6. Check against the real thing
 
 ```bash
 pnpm run probe
-pnpm run e2e:openchamber -- --bridge http://127.0.0.1:<ポート>
-pnpm run e2e:openchamber-events -- --bridge http://127.0.0.1:<ポート>
+pnpm run e2e:openchamber -- --bridge http://127.0.0.1:<port>
+pnpm run e2e:openchamber-events -- --bridge http://127.0.0.1:<port>
 ```
 
-## dsh を上げる手順
+## Upgrade procedure for dsh
 
-1. `package.json` の dsh 系依存を新しい rc へ、`engines.dsh` の範囲を更新する。
-2. `pnpm typecheck` で ABI 差分を見る。
-3. 動かなかった箇所は `src/bridge/rpc.ts`（ホストサービス呼び出し）と
-   `src/bridge/state.ts`（メモリ状態）に集まることが多い。
-4. `cordis.patch.yml` の插件行が新しい dsh の插件名と一致しているか確認する
-   （`agent-presets` は `agent-preset-registry` と `agent-preset` に分かれた）。
+1. Move the dsh dependencies in `package.json` to the new rc and update the `engines.dsh` range.
+2. Run `pnpm typecheck` to see the ABI diff.
+3. What breaks usually concentrates in `src/bridge/rpc.ts` (host service calls) and
+   `src/bridge/state.ts` (in-memory state).
+4. Check that the plugin lines in `cordis.patch.yml` match the plugin names of the new dsh
+   (`agent-presets` split into `agent-preset-registry` and `agent-preset`).
 
-## OpenChamber を上げる手順
+## Upgrade procedure for OpenChamber
 
-1. `pnpm --filter @openchamber/web install` で公式ビルドを取る。
-2. `scripts/e2e-openchamber-bootstrap.mjs`（起動時 22 呼び出し）と
-   `scripts/e2e-openchamber-events.ts`（reducer 通過）を回す。
-3. reducer が新しい語彙を増えた場合は `src/bridge/events.ts` 側の追加対応が要る。
-   OpenChamber の reducer は `packages/ui/src/lib/opencode/events.ts` の
-   `translateWireEvent` が読む語彙しか解釈しない。
+1. Fetch the official build with `pnpm --filter @openchamber/web install`.
+2. Run `scripts/e2e-openchamber-bootstrap.mjs` (the 22 calls at startup) and
+   `scripts/e2e-openchamber-events.ts` (reducer pass-through).
+3. When the reducer gains new vocabulary, `src/bridge/events.ts` needs matching additions.
+   The OpenChamber reducer only interprets the vocabulary that `translateWireEvent` in
+   `packages/ui/src/lib/opencode/events.ts` reads.
 
-### ブラウザ E2E の既知の制約
+### Known browser E2E constraint
 
-Obscura のブラウザは `fetch()` にストリーミング HTTP 応答を届けられない。chunked
-応答を約束するヘッダが解決しないまま止まるので、OpenChamber 2.5 も公式 OpenCode
-Web アプリも `/api/event` で止まる。公式 opencode サーバと同じヘッダを書く素の
-Node HTTP サーバでも同じ症状になり、完了する応答（`GET /api/info` など）は届く。
-公式 OpenCode 2.1.0 クライアント（Node、ブラウザではない）は bridge の
-`/api/event` に購読でき、bridge 側のストリームは正しい。
+The Obscura browser cannot deliver a streaming HTTP response to `fetch()`. The headers that
+promise a chunked response never resolve, so both OpenChamber 2.5 and the official OpenCode Web
+app stall at `/api/event`. A plain Node HTTP server that writes the same headers as the official
+opencode server shows the same symptom, while responses that complete (`GET /api/info` and so on)
+arrive. The official OpenCode 2.1.0 client (Node, not a browser) can subscribe to the bridge's
+`/api/event`, and the bridge-side stream is correct.
 
-つまりブラウザレベルの E2E は、この環境で使える Obscura では実施できない。
-dsh-oc の制約でも OpenChamber 側の制約でもなく、手元のツールの制約である。API 経路は
-`scripts/e2e-openchamber-bootstrap.mjs` で検証する。
+Browser-level E2E therefore cannot run with the Obscura available in this environment. This is a
+constraint of the local tooling, not of dsh-oc or of OpenChamber. The API path is verified with
+`scripts/e2e-openchamber-bootstrap.mjs`.
 
-## モデル（provider）の設定
+## Model (provider) configuration
 
-dsh は provider に**使える資格情報があるときだけ**そのモデルを列挙する。資格情報が
-無いと `/api/model` は空になり、モデルをカタログに対して解決するクライアント
-（TUI がそう）は「モデル未選択」のまま OpenCode の provider 接続フローに落ちる。
-dsh-oc はこのフローを使わないので、その画面からは復帰できない。
+dsh lists a model for a provider **only when that provider has usable credentials**. Without
+credentials `/api/model` is empty, and a client that resolves models against the catalog (the TUI
+does) stays on "no model selected" and falls into OpenCode's provider connection flow. dsh-oc does
+not use that flow, so you cannot get back out of that screen.
 
-ブリッジ側の受け皿:
+What the bridge does instead:
 
-- カタログが空でも、dsh の設定にある既定モデルを `/api/model`・`/api/provider`・
-  `/api/model/default` に出す（モデル名は見えるが、呼ぶには資格情報が要る）。
-- `/api/config` に `{ type: "document", info: { model, default_agent } }` を返す
-  （TUI はここから既定モデルと agent を読む）。
-- モデルを指定した `POST /api/session` が失敗してもセッションは作る。本当の
-  エラーはプロンプト時に出る。
-- モデル切り替えが `session/model-unavailable` で失敗したら、どのキーを設定すべきか
-  までメッセージに含める。
-- カタログが空の理由は起動中 1 回だけログに出す（`[bridge/model] the model catalog
-  is empty (...)`）。
+- Even with an empty catalog, expose the default model from the dsh configuration on `/api/model`,
+  `/api/provider`, and `/api/model/default` (the model name is visible, but calling it needs
+  credentials).
+- Return `{ type: "document", info: { model, default_agent } }` from `/api/config` (the TUI reads
+  the default model and agent from there).
+- If `POST /api/session` with an explicit model fails, still create the session. The real error
+  appears at prompt time.
+- When a model switch fails with `session/model-unavailable`, include which key to set in the
+  message.
+- Log the reason the catalog is empty once per startup
+  (`[bridge/model] the model catalog is empty (...)`).
 
-dsh-oc の profile は `dsh-base` の既定（`deepseek-official` + `DEEPSEEK_API_KEY`）を
-そのまま使う。別の provider を使うなら profile の `cordis.patch.yml` に
-`llm-pi-ai` と `agent-default-model` を書く。実例（キーは
-`~/.dsh/.credentials.yaml` の `refs` に置く。値は表示しない）:
+The dsh-oc profile uses the `dsh-base` default (`deepseek-official` + `DEEPSEEK_API_KEY`) as is.
+To use another provider, add `llm-pi-ai` and `agent-default-model` to the profile's
+`cordis.patch.yml`. Example (the key goes under `refs` in `~/.dsh/.credentials.yaml`; do not
+display the value):
 
 ```yaml
 - id: llm-pi-ai
@@ -183,14 +185,14 @@ dsh-oc の profile は `dsh-base` の既定（`deepseek-official` + `DEEPSEEK_AP
     reasoningEffort: high
 ```
 
-`@deepseek-ai/dsh-llm-pi-ai` は profile に入れる:
+Install `@deepseek-ai/dsh-llm-pi-ai` into the profile:
 
 ```bash
 dsh plugin --profile oc add @deepseek-ai/dsh-llm-pi-ai@0.2.1-rc.2
 ```
 
-pnpm 12 が `ERR_PNPM_IGNORED_BUILDS` で止まる場合（推移依存にビルドスクリプトが
-ある）、そのパッケージのスクリプトを明示的に拒否して入れる:
+When pnpm 12 stops with `ERR_PNPM_IGNORED_BUILDS` (a transitive dependency has a build script),
+install while explicitly rejecting that package's script:
 
 ```bash
 cd ~/.dsh/profiles/oc
@@ -198,18 +200,18 @@ pnpm add @deepseek-ai/dsh-llm-pi-ai@0.2.1-rc.2 \
   --allow-build='!@google/genai' --allow-build='!protobufjs'
 ```
 
-確認は `/api/model` の件数、`/api/model/default` の `id`、TUI ホーム下部の
-`Minimal · <モデル名> <provider>` 表示。
+To verify, check the count on `/api/model`, the `id` on `/api/model/default`, and the
+`Minimal · <model name> <provider>` label at the bottom of the TUI home screen.
 
-### GitHub 源の更新
+### Updating from the GitHub source
 
 ```bash
 dsh plugin --profile oc add 'github:<owner>/dsh-oc#<branch>'
 ```
 
-pnpm 12 は同じ ref の解決を再利用し、「Lockfile is up to date」で終わって古い
-commit のままになることがある。その場合は profile で `pnpm update` を実行し、
-`pnpm-lock.yaml` の `tar.gz/<sha>` が新しい commit を指すことを確認する:
+pnpm 12 may reuse the resolution of the same ref, finish with "Lockfile is up to date", and stay on
+the old commit. In that case run `pnpm update` in the profile and check that the `tar.gz/<sha>` in
+`pnpm-lock.yaml` points at the new commit:
 
 ```bash
 cd ~/.dsh/profiles/oc

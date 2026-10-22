@@ -7894,6 +7894,18 @@ interface BridgeApi {
     forgetFiles(sessionId: string): void;
   };
   sessionProjections?: unknown;
+  /**
+   * MCP servers dsh has connected, for the OpenCode MCP panel. dsh configures
+   * each server as an `mcp-client` plugin and registers its tools as
+   * `mcp__<server>__<tool>`, so the tool registry is the authoritative view of
+   * which servers are live.
+   */
+  mcp?: {
+    servers(): Array<{
+      name: string;
+      tools: string[];
+    }>;
+  };
 }
 /** Structural view of `@deepseek-ai/dsh-commands` CommandExecution. */
 interface BridgeCommandExecution {

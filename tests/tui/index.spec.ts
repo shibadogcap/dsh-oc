@@ -9,6 +9,7 @@ import {
   DSH_OC_TUI_TIMESTAMPS,
   exitNoteEnabled,
   filterSupportedArgs,
+  helpLanguageFromEnv,
   helpRequested,
   installSignalForwarding,
   OcTuiConfig,
@@ -179,17 +180,29 @@ describe('resolveTuiDir', () => {
 })
 
 describe('ocHelp', () => {
-  it('includes version, attach args, capability summary and docs entry', () => {
-    const text = ocHelp('9.9.9')
+  it('defaults to English with version, attach args, capability summary and docs entry', () => {
+    const text = ocHelp('9.9.9', 'en')
     expect(text).toContain('dsh-oc 9.9.9')
     expect(text).toContain('opencode 2.1.0')
     expect(text).toContain('--continue/-c')
     expect(text).toContain('--session/-s')
-    expect(text).toContain('核心能力')
-    expect(text).toContain('会话列表真实标题')
-    expect(text).toContain('Esc 打断/取消')
+    expect(text).toContain('Capabilities')
+    expect(text).toContain('real session titles')
+    expect(text).toContain('Esc interrupt/cancel')
     expect(text).toContain('docs/FEATURES.md')
     expect(text).toContain('docs/PROTOCOL.md')
+  })
+
+  it('serves Japanese and Chinese through DSH_OC_LANG', () => {
+    expect(ocHelp('1.0.0', 'ja')).toContain('主な機能')
+    expect(ocHelp('1.0.0', 'zh')).toContain('核心能力')
+    expect(helpLanguageFromEnv({ DSH_OC_LANG: 'ja' })).toBe('ja')
+    expect(helpLanguageFromEnv({ DSH_OC_LANG: 'zh-CN' })).toBe('zh')
+    expect(helpLanguageFromEnv({})).toBe('en')
+  })
+
+  it('reports MCP as available from the dsh profile', () => {
+    expect(ocHelp('1.0.0', 'en')).toContain('mcp__<server>__<tool>')
   })
 })
 

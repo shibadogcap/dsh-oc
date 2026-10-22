@@ -129,6 +129,42 @@ export interface OcBridgeValue {
 }
 
 /**
+ * MCP servers dsh has connected, read from the shared tool registry.
+ *
+ * dsh's `mcp-client` registers each server's tools as
+ * `mcp__<server>__<tool>`, so a server with no registered tools is not live:
+ * disconnected, failed before its first sync, or never configured. That makes
+ * the registry the honest source for the OpenCode MCP panel, which only needs
+ * names and a status.
+ */
+export function mcpServersFromTools(ctx: Context): Array<{ name: string; tools: string[] }> {
+  const registry = ctx.get('tools') as
+    | { schemas?: (scope?: unknown) => Array<{ name?: unknown }> }
+    | undefined
+  if (registry?.schemas === undefined) return []
+  let schemas: Array<{ name?: unknown }>
+  try {
+    schemas = registry.schemas()
+  } catch {
+    return []
+  }
+  const groups = new Map<string, string[]>()
+  for (const schema of schemas) {
+    const name = typeof schema?.name === 'string' ? schema.name : ''
+    const match = /^mcp__([A-Za-z0-9_-]{1,32})__(.+)$/.exec(name)
+    if (match === null) continue
+    const server = match[1] as string
+    const tool = match[2] as string
+    const tools = groups.get(server)
+    if (tools === undefined) groups.set(server, [tool])
+    else tools.push(tool)
+  }
+  return [...groups.entries()]
+    .map(([name, tools]) => ({ name, tools: tools.sort() }))
+    .sort((left, right) => left.name.localeCompare(right.name))
+}
+
+/**
  * oc-bridge cordis service: owns the loopback HTTP/SSE server and exposes
  * `{ url, port }` once the listener is ready. `Service.init` starts the
  * server before the service becomes injectable, and yields the teardown
@@ -174,6 +210,9 @@ export class OcBridgeService extends Service implements OcBridgeValue {
       ...(sessions === undefined ? {} : { sessions }),
       ...(sessionProjections === undefined ? {} : { sessionProjections }),
       ...(rewind === undefined ? {} : { rewind }),
+      // Resolved lazily: the bridge starts before every host service is
+      // injectable, and the registry is only read when a client asks.
+      mcp: { servers: () => mcpServersFromTools(this.ctx) },
     }
     installSessionEventsOnLiveSessions(sessions)
     const webUi = await resolveWebUi(this.logger)

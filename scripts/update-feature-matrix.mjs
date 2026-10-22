@@ -61,7 +61,6 @@ function testCount(source) {
   return (source.match(/\bit\(/g) ?? []).length + (source.match(/\btest\(/g) ?? []).length
 }
 
-const featuresPath = join(root, 'docs', 'FEATURES.md')
 const routes = parseRoutes()
 const tests = collectFiles(join(root, 'tests'))
   .filter((file) => file.path.endsWith('.spec.ts'))
@@ -100,53 +99,102 @@ const sourceRows = [...srcFiles, ...scriptFiles]
   .map((file) => `| \`${file.path}\` | ${file.commit || '—'} |`)
   .join('\n')
 
-const auto = `<!-- FEATURES:AUTO:START -->
-## 自动追踪（脚本生成）
+const startMarker = '<!-- FEATURES:AUTO:START -->'
+const endMarker = '<!-- FEATURES:AUTO:END -->'
 
-> 运行 \`pnpm run features:update\` 重新生成。生成时 HEAD：\`${head}\`（${headDate}）。
+// The auto-tracked block is generated in the language of the document it lands
+// in, so the English default, the Japanese and the Chinese files stay in step.
+const LABELS = {
+  en: {
+    title: 'Auto-tracked (generated)',
+    note: `Run \`pnpm run features:update\` to regenerate. Generated at HEAD: \`${head}\` (${headDate}).`,
+    routesTitle: 'Route registry',
+    routesNote: 'Routes registered by `src/bridge/router.ts` and `src/bridge/stubs.ts`. '
+      + '`/command`, `/skill`, `/reference`, `/integration` and their `/api/*` twins are registered '
+      + 'dynamically in a `for` loop in the route sources, so this table lists the resolved literals '
+      + 'plus the stub routes.',
+    routeHeader: '| Method | Route | Kind | Source |',
+    testsTitle: 'Test coverage',
+    testHeader: '| Test file | Cases | Last updated |',
+    sourcesTitle: 'Key implementation, last updated',
+    sourceHeader: '| File | Last updated |',
+  },
+  ja: {
+    title: '自動追跡（スクリプト生成）',
+    note: `\`pnpm run features:update\` で再生成します。生成時の HEAD: \`${head}\`（${headDate}）。`,
+    routesTitle: 'ルート登録表',
+    routesNote: '`src/bridge/router.ts` と `src/bridge/stubs.ts` が登録するルートです。'
+      + '`/command`、`/skill`、`/reference`、`/integration` とその `/api/*` 対のルートは'
+      + 'ルート定義側の `for` ループで動的に登録されるため、この表には解決済みのリテラルと'
+      + ' stub ルートを載せています。',
+    routeHeader: '| Method | Route | Kind | ソース |',
+    testsTitle: 'テストカバレッジ',
+    testHeader: '| テストファイル | ケース数 | 最終更新 |',
+    sourcesTitle: '主要実装の最終更新',
+    sourceHeader: '| ファイル | 最終更新 |',
+  },
+  zh: {
+    title: '自动追踪（脚本生成）',
+    note: `运行 \`pnpm run features:update\` 重新生成。生成时 HEAD：\`${head}\`（${headDate}）。`,
+    routesTitle: '路由注册表',
+    routesNote: '来自 `src/bridge/router.ts` 与 `src/bridge/stubs.ts` 的注册路由；'
+      + '`for` 循环展开的 `/command`、`/skill`、`/reference`、`/integration` 及 `/api/*` 对偶路由'
+      + '会在路由源码中以 `register` 动态注册，此处列出已解析的字面量 + stub 路由。',
+    routeHeader: '| Method | Route | Kind | 来源 |',
+    testsTitle: '测试覆盖',
+    testHeader: '| 测试文件 | 用例数 | 最后更新 |',
+    sourcesTitle: '关键实现最后更新',
+    sourceHeader: '| 文件 | 最后更新 |',
+  },
+}
 
-### 路由注册表
+function autoBlock(language) {
+  const labels = LABELS[language]
+  return `<!-- FEATURES:AUTO:START -->
+## ${labels.title}
 
-来自 \`src/bridge/router.ts\` 与 \`src/bridge/stubs.ts\` 的注册路由；\`for\` 循环展开的
-\`/command\`、\`/skill\`、\`/reference\`、\`/integration\` 及 \`/api/*\` 对偶路由会在
-路由源码中以 \`register\` 动态注册，此处列出已解析的字面量 + stub 路由。
+> ${labels.note}
 
-| Method | Route | Kind | 来源 |
+### ${labels.routesTitle}
+
+${labels.routesNote}
+
+${labels.routeHeader}
 |---|---|---|---|
 ${routeRows}
 
-### 测试覆盖
+### ${labels.testsTitle}
 
-| 测试文件 | 用例数 | 最后更新 |
+${labels.testHeader}
 |---|---|---|
 ${testRows}
 
-### 关键实现最后更新
+### ${labels.sourcesTitle}
 
-| 文件 | 最后更新 |
+${labels.sourceHeader}
 |---|---|
 ${sourceRows}
-<!-- FEATURES:AUTO:END -->
-`
-
-const startMarker = '<!-- FEATURES:AUTO:START -->'
-const endMarker = '<!-- FEATURES:AUTO:END -->'
-let content = ''
-try {
-  content = readFileSync(featuresPath, 'utf8')
-} catch {
-  content = ''
+<!-- FEATURES:AUTO:END -->`
 }
 
-const startIndex = content.indexOf(startMarker)
-const endIndex = content.indexOf(endMarker)
-if (startIndex === -1 || endIndex === -1 || endIndex < startIndex) {
-  content = `${content.trimEnd()}\n\n${auto.trimEnd()}\n`
-} else {
-  const prefix = content.slice(0, startIndex)
-  const suffix = content.slice(endIndex + endMarker.length).trim()
-  content = `${prefix}${auto.trimEnd()}\n${suffix === '' ? '' : `\n${suffix}\n`}`
+for (const [language, suffix] of [['en', ''], ['ja', '.ja'], ['zh', '.zh']]) {
+  const path = join(root, 'docs', `FEATURES${suffix}.md`)
+  let content
+  try {
+    content = readFileSync(path, 'utf8')
+  } catch {
+    continue
+  }
+  const block = autoBlock(language)
+  const startIndex = content.indexOf(startMarker)
+  const endIndex = content.indexOf(endMarker)
+  if (startIndex === -1 || endIndex === -1 || endIndex < startIndex) {
+    content = `${content.trimEnd()}\n\n${block.trimEnd()}\n`
+  } else {
+    const prefix = content.slice(0, startIndex)
+    const suffixText = content.slice(endIndex + endMarker.length).trim()
+    content = `${prefix}${block.trimEnd()}\n${suffixText === '' ? '' : `\n${suffixText}\n`}`
+  }
+  writeFileSync(path, content)
+  console.log(`updated docs/FEATURES${suffix}.md (${routes.length} routes, ${tests.length} test files)`)
 }
-
-writeFileSync(featuresPath, content)
-console.log(`updated docs/FEATURES.md (${routes.length} routes, ${tests.length} test files)`)

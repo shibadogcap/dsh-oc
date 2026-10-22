@@ -4277,7 +4277,7 @@ describe('bridge router: model variants, agent presets and /preset', () => {
       parts: [{ type: 'text', text: '/help' }],
     })
     expect(slash.status).toBe(200)
-    expect(texts.at(-1)).toContain('核心能力')
+    expect(texts.at(-1)).toContain('Capabilities')
     expect(calls).toHaveLength(0)
   })
 

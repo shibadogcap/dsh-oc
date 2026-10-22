@@ -12,7 +12,8 @@
 import * as R from '../router.js'
 import { locationInfo } from '../router.js'
 import type { RouteRegistrar } from '../routes.js'
-import { notFound } from '../errors.js'
+import type { BridgeRouteContext } from '../router.js'
+import { badRequest, notFound } from '../errors.js'
 import { externalProviderId } from '../convert/common.js'
 import { convertToV2Models } from '../convert/model.js'
 import {
@@ -124,12 +125,30 @@ export function registerV2StubRoutes(register: RouteRegistrar): void {
     return R.json(204)
   })
 
-  // mcp — the 2.1.0 client reads `McpServer[]`
-  register('GET', '/api/mcp', 'json', async () => R.json(200, { location: {}, data: [] }))
-  register('POST', '/api/mcp', 'json', async () => R.json(200))
-  register('DELETE', '/api/mcp/:name', 'json', async () => R.json(200))
-  register('POST', '/api/mcp/:name/connect', 'json', async () => R.json(200))
-  register('POST', '/api/mcp/:name/disconnect', 'json', async () => R.json(200))
+  // mcp — the 2.1.0 client reads `McpServer[]`. dsh configures each server as
+  // an `mcp-client` plugin and its tools land on the shared registry, so the
+  // list is derived from the tools that are actually registered.
+  register('GET', '/api/mcp', 'json', async (_req, ctx) => {
+    const servers = ctx.api.mcp?.servers() ?? []
+    return R.json(200, {
+      location: R.locationInfo(ctx),
+      data: servers.map((server) => ({ name: server.name, status: { status: 'connected' } })),
+    })
+  })
+  // MCP servers are profile configuration, not runtime state: dsh has no
+  // registry to add one to. Say so instead of accepting a change that would
+  // not happen.
+  const mcpRuntime = (ctx: Pick<BridgeRouteContext, 'log'>, action: string): never => {
+    const message = 'MCP servers are configured in the dsh profile as mcp-client plugins; '
+      + `the bridge cannot ${action} at runtime. Add or remove the entry in the profile's `
+      + 'cordis.patch.yml and restart dsh.'
+    logStub(ctx, `POST /api/mcp (${action})`, message)
+    throw badRequest(message, { code: 'mcp/profile-configured' })
+  }
+  register('POST', '/api/mcp', 'json', async (_req, ctx) => mcpRuntime(ctx, 'add a server'))
+  register('DELETE', '/api/mcp/:name', 'json', async (_req, ctx) => mcpRuntime(ctx, 'remove a server'))
+  register('POST', '/api/mcp/:name/connect', 'json', async (_req, ctx) => mcpRuntime(ctx, 'connect a server'))
+  register('POST', '/api/mcp/:name/disconnect', 'json', async (_req, ctx) => mcpRuntime(ctx, 'disconnect a server'))
   register('GET', '/api/mcp/resource', 'json', async () => R.json(200, { location: {}, data: { resources: [], templates: [] } }))
 
   // credential — the 2.1.0 client unwraps `{ data }`

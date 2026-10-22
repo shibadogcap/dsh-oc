@@ -1,147 +1,155 @@
-# OpenChamber 2.5 互換性
+*English · [日本語](OPENCHAMBER.ja.md)*
 
-## 接続
+# OpenChamber 2.5 compatibility
 
-dsh-oc のブリッジは OpenCode v2 API（`/api/*`）を提供する。OpenChamber 2.5 は
-`GET /api/info` の version が `2.0.20` 以上であれば接続を受け付ける。
+## Connection
+
+The dsh-oc bridge serves the OpenCode v2 API (`/api/*`). OpenChamber 2.5 accepts
+the connection when the version in `GET /api/info` is `2.0.20` or higher.
 
 ```
-# 1. ブリッジを起動する
+# 1. Start the bridge
 dsh --profile oc
 
-# 2. ブリッジのURLを確認する（起動ログの "bridge listening on ..."）
-#    DSH_OC_PORT でポートを固定できる
+# 2. Check the bridge URL (the "bridge listening on ..." line in the startup log)
+#    DSH_OC_PORT pins the port
 DSH_OC_PORT=41800 dsh --profile oc
 
-# 3. OpenChamber を外部ホスト接続モードで起動する
+# 3. Start OpenChamber in external-host connection mode
 OPENCODE_HOST=http://127.0.0.1:41800 OPENCODE_SKIP_START=true openchamber
 ```
 
-`DSH_OC_HOST` はバインド先、`DSH_OC_PORT` は待受ポートを変える。既定は
-`127.0.0.1` とランダムポート。
+`DSH_OC_HOST` changes the bind address and `DSH_OC_PORT` the listening port. The
+defaults are `127.0.0.1` and a random port.
 
-公式 OpenCode の Web UI も bridge と同じ源で提供される。ブラウザで
-`http://127.0.0.1:<port>/` を開くと公式 UI が立ち上がり、UI は
-`location.origin` に対して API を呼ぶので CORS もログインも要らない。UI の
-ファイルは opencode バイナリから `$DSH_HOME/opencode/web-ui/<version>/` に
-展開される（`DSH_OC_WEB_UI` で別のディレクトリを指定できる）。
+The official OpenCode Web UI is served from the same source as the bridge.
+Opening `http://127.0.0.1:<port>/` in a browser starts the official UI, and the
+UI calls the API against `location.origin`, so neither CORS nor login is needed.
+The UI files are extracted from the opencode binary into
+`$DSH_HOME/opencode/web-ui/<version>/` (`DSH_OC_WEB_UI` selects a different
+directory).
 
-## 検証
+## Verification
 
-### 起動時に UI が呼ぶルート
+### Routes the UI calls at startup
 
-`packages/ui/src/sync/bootstrap.ts` が起動時に呼ぶ次のルートは、すべて
-dsh-oc が応答する。
+dsh-oc answers every one of the following routes that
+`packages/ui/src/sync/bootstrap.ts` calls at startup.
 
-| 呼び出し | ルート | dsh-oc の応答 |
+| Call | Route | dsh-oc response |
 | --- | --- | --- |
 | `server.info` | `GET /api/info` | version 2.1.0 |
-| `location.get` | `GET /api/location` | directory と project |
-| `project.list` | `GET /api/project` | bridge の作業ディレクトリ（`Project`） |
-| `config.get` | `GET /api/config` | 空の設定 |
-| `model.list` | `GET /api/model` | dsh のモデルカタログ |
-| `provider.list` | `GET /api/provider` | dsh のプロバイダ |
-| `agent.list` | `GET /api/agent` | dsh の agent preset |
-| `session.list` | `GET /api/session` | dsh のセッション一覧 |
-| `session.active` | `GET /api/session/active` | 実行中セッション |
-| `permission.request.list` | `GET /api/permission/request` | 承認待ち |
-| `form.list` | `GET /api/form` | 質問待ち |
-| `vcs.get` | `GET /api/vcs` | 作業ツリーの状態 |
-| `shell.list` | `GET /api/shell` | バックグラウンドシェル |
-| `command.list` | `GET /api/command` | スラッシュコマンド |
-| `skill.list` | `GET /api/skill` | dsh のスキル |
-| イベント | `GET /api/event` | SSE ストリーム |
+| `location.get` | `GET /api/location` | directory and project |
+| `project.list` | `GET /api/project` | the bridge's working directory (`Project`) |
+| `config.get` | `GET /api/config` | empty configuration |
+| `model.list` | `GET /api/model` | the dsh model catalog |
+| `provider.list` | `GET /api/provider` | dsh providers |
+| `agent.list` | `GET /api/agent` | dsh agent presets |
+| `session.list` | `GET /api/session` | the dsh session list |
+| `session.active` | `GET /api/session/active` | running sessions |
+| `permission.request.list` | `GET /api/permission/request` | pending approvals |
+| `form.list` | `GET /api/form` | pending questions |
+| `vcs.get` | `GET /api/vcs` | working tree status |
+| `shell.list` | `GET /api/shell` | background shells |
+| `command.list` | `GET /api/command` | slash commands |
+| `skill.list` | `GET /api/skill` | dsh skills |
+| Events | `GET /api/event` | SSE stream |
 
-### 送信時のフロー
+### Send flow
 
-| 呼び出し | ルート | 備考 |
+| Call | Route | Notes |
 | --- | --- | --- |
-| `session.create` | `POST /api/session` | `agent` を指定できる |
-| `session.prompt` | `POST /api/session/:id/prompt` | v2 の本文は `{ id?, text, files?, agents?, skills? }` |
+| `session.create` | `POST /api/session` | can specify `agent` |
+| `session.prompt` | `POST /api/session/:id/prompt` | the v2 body is `{ id?, text, files?, agents?, skills? }` |
 | `message.list` | `GET /api/session/:id/message` | `{ data, cursor }` |
 | `session.get` | `GET /api/session/:id` | `{ data }` |
 | `session.interrupt` | `POST /api/session/:id/interrupt` | `{ interrupted }` |
 
-### 巻き戻し（revert）
+### Revert
 
-OpenChamber の巻き戻し UI は 3 つのルートを呼ぶ。dsh-oc はいずれも実装済みで、
-境界は OpenCode 2.1.0 と同じく排他（指定したメッセージ自身とその後のメッセージは
-commit 時に落ちる）。
+OpenChamber's revert UI calls three routes. dsh-oc implements all three, and the
+boundary is exclusive as in OpenCode 2.1.0 (the named message itself and every
+later message are dropped at commit).
 
-| 呼び出し | ルート | dsh-oc の応答 |
+| Call | Route | dsh-oc response |
 | --- | --- | --- |
-| `session.revert.stage` | `POST /api/session/:id/revert/stage` | `{ data: { messageID, files? } }`。`files` は巻き戻すファイル（境界の後のターンが変えたもの）の diff |
-| `session.revert.clear` | `DELETE /api/session/:id/revert` | 204。stage で巻き戻したファイルは元に戻す |
-| `session.revert.commit` | `POST /api/session/:id/revert/commit` | 204。境界メッセージより前のメッセージだけが新しい会話に残る |
+| `session.revert.stage` | `POST /api/session/:id/revert/stage` | `{ data: { messageID, files? } }`. `files` is the diff of the files to roll back (those changed by the turns after the boundary) |
+| `session.revert.clear` | `DELETE /api/session/:id/revert` | 204. Restores the files rolled back at stage |
+| `session.revert.commit` | `POST /api/session/:id/revert/commit` | 204. Only the messages before the boundary message remain in the new conversation |
 
-ファイルは stage の時点で既に巻き戻される。diff は巻き戻す前に計算するので空に
-ならず、clear で元に戻せる（commit は巻き戻した内容を保持する）。
+The files are already rolled back at stage time. The diff is computed before the
+rollback, so it is not empty, and clear can restore it (commit keeps the
+rolled-back content).
 
-commit は dsh のセッションを fork して、**opencode のセッション id はそのまま**
-（fork を指すエイリアスが付く）。そのためセッション一覧・履歴・SSE はすべて元の
-id のまま参照できる（一覧は fork を元の id で公開し、置換されたセッションは消える）。
-OpenCode と同じく、次のプロンプトを送ると stage 済みの巻き戻しは先に commit され、
-そのプロンプトは fork 側のセッションに落ちる。
+Commit forks the dsh session and **keeps the opencode session id** (an alias
+points at the fork). The session list, the history, and SSE all remain reachable
+under the original id (the list publishes the fork under the original id, and the
+replaced session disappears). As in OpenCode, the next prompt first commits the
+staged revert, and that prompt lands in the forked session.
 
-UI は `session.revert.staged` / `session.revert.cleared` /
-`session.revert.committed` の 3 イベントで状態を更新する。この 3 つは dsh 側の
-対応物を持たないため、revert ルートが直接発行する。SSE の 1.18.18 用の
-`payload.*` ラッパも同じ `data` を入れて同時に流れる。
+The UI updates its state from three events: `session.revert.staged`,
+`session.revert.cleared`, and `session.revert.committed`. dsh has no counterpart
+for these three, so the revert routes emit them directly. The 1.18.18 SSE wrapper
+(`payload.*`) carries the same `data` and streams at the same time.
 
-OpenChamber の reducer は `session.revert.staged` / `session.revert.cleared` を
-`session.patched`（`patch.revert`）に写し、`session.revert.committed` はそのまま
-sync イベントとして残す。UI は 3 つすべてを使うので、3 つとも出しつづけること。
+OpenChamber's reducer maps `session.revert.staged` / `session.revert.cleared` to
+`session.patched` (`patch.revert`) and keeps `session.revert.committed` as a sync
+event unchanged. The UI uses all three, so keep emitting all three.
 
-### 検証コマンド
+### Verification commands
 
 ```
-# 公式クライアントが呼べる 137 ルートをすべて登録できているか
+# Are all 137 routes the official client can call registered?
 pnpm run check:client-routes
 
-# 起動時の呼び出しと送信フローを実ブリッジで流す
+# Run the startup calls and the send flow against a real bridge
 pnpm run e2e:openchamber -- --bridge http://127.0.0.1:41800
 
-# OpenChamber 自身の reducer にブリッジのイベントを通す
+# Run the bridge events through OpenChamber's own reducer
 pnpm run e2e:openchamber-events -- --bridge http://127.0.0.1:41800
 
-# ブラウザで UI まで含めて確認する（Obscura 経由）
+# Check in a browser, UI included (through Obscura)
 node scripts/e2e-openchamber.mjs --bridge http://127.0.0.1:41800 \
      --chamber http://127.0.0.1:3000 --password <ui-password>
 ```
 
-ブラウザ E2E は `/api/event` のストリームで止まる（下の「既知の障害」を参照）。
-検証は API 経路と reducer 経路の 2 本で行う。
+The browser E2E stops at the `/api/event` stream (see "Known failures" below).
+Verify through the two paths: the API path and the reducer path.
 
-`tests/contract/client.spec.ts` は `@opencode/client` 2.1.0 を実ブリッジに
-当てて契約どおりに answered されるかを確認する。`tests/contract/routes.spec.ts`
-は公式クライアントの 137 ルートとブリッジの登録済みルートを比較し、差分があると
-失敗する。`tests/contract/events.spec.ts` は dsh のイベントが v2 の語彙に
-変換されることを確認する。
+`tests/contract/client.spec.ts` applies `@opencode/client` 2.1.0 to a real bridge
+and checks that it is answered according to the contract.
+`tests/contract/routes.spec.ts` compares the 137 routes of the official client
+with the routes registered on the bridge and fails on any difference.
+`tests/contract/events.spec.ts` checks that dsh events are converted to the v2
+vocabulary.
 
-## イベントの語彙
+## Event vocabulary
 
-ブリッジは 1.18.18 用のイベント名と 2.x 用のイベント名の両方を流す。1.18.18
-用のイベント名は同梱の TUI が読むため残しており、2.x 用のイベント名は
-OpenChamber の reducer が読む。対応表は `docs/PROTOCOL.md` の 5.1 節にある。
+The bridge streams both the 1.18.18 event names and the 2.x event names. The
+1.18.18 names stay because the bundled TUI reads them, and the 2.x names are read
+by OpenChamber's reducer. The mapping table is in section 5.1 of
+`docs/PROTOCOL.md`.
 
-SSE のフレームは 2.x の封筒（`id`、`created`、`type`、`durable`、`location`、
-`data`）で Pune され、1.18.18 用のラッパ（`payload.*`）も同時に含まれる。
+SSE frames are wrapped in the 2.x envelope (`id`, `created`, `type`, `durable`,
+`location`, `data`) and also carry the 1.18.18 wrapper (`payload.*`) at the same
+time.
 
-## 既知の障害
+## Known failures
 
-- 認証ガードが `app.use('/api', ...)` としてマウントされているため、未認証の
-  `/api/*` 応答の `Content-Type` が `text/plain` になる。OpenCode v2 クライアントは
-  応答の内容型を先に確認するため、`UnsupportedContentType` として見える。
-  先に `POST /auth/session` で認証すると `/api/*` は `application/json` を返す。
-- Obscura のブラウザは `fetch()` にストリーミング HTTP 応答を届けられない。chunked
-  応答を約束するヘッダが解決しないまま止まる。OpenChamber 2.5 と公式 OpenCode
-  Web アプリはいずれも `/api/event` で止まる。公式 opencode サーバと同じヘッダ
-  （`text/event-stream`、content-length なし）を書く素の Node HTTP サーバでも同じ
-  症状になり、完了する応答（`GET /api/info` など）は届く。
-  公式 OpenCode 2.1.0 クライアント（Node、ブラウザではない）は bridge の
-  `/api/event` に購読して約 40 ms で `server.connected` を受け取るので、bridge
-  側のストリームは正しい。
-  つまり、ブラウザレベルの E2E（ストリーミングを使う Web UI）は、この環境で使える
-  Obscura では実施できない。dsh-oc の制約でも OpenChamber 側の制約でもなく、手元の
-  ツールの制約である。
-
+- The authentication guard is mounted as `app.use('/api', ...)`, so an
+  unauthenticated `/api/*` response has `Content-Type` `text/plain`. An OpenCode v2
+  client checks the response content type first, so the response shows up as
+  `UnsupportedContentType`. Authenticate first with `POST /auth/session`, and
+  `/api/*` returns `application/json`.
+- Obscura's browser cannot deliver a streaming HTTP response to `fetch()`. A
+  header that promises a chunked response never resolves and the request hangs.
+  Both OpenChamber 2.5 and the official OpenCode Web app stop at `/api/event`. A
+  bare Node HTTP server that writes the same headers as the official opencode
+  server (`text/event-stream`, no content-length) shows the same symptom, while
+  responses that complete (such as `GET /api/info`) arrive.
+  The official OpenCode 2.1.0 client (Node, not a browser) subscribes to the
+  bridge's `/api/event` and receives `server.connected` in about 40 ms, so the
+  stream on the bridge side is correct.
+  In other words, a browser-level E2E (a Web UI that uses streaming) cannot run
+  on Obscura as available in this environment. This is a limitation of the local
+  tooling, not a dsh-oc limitation and not an OpenChamber limitation.

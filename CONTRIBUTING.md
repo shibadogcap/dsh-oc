@@ -1,93 +1,97 @@
-# 参与 dsh-oc 开发
+*English · [日本語](CONTRIBUTING.ja.md) · [中文](CONTRIBUTING.zh.md)*
 
-> AI Agent 接手仓库请先读 [AGENTS.md](AGENTS.md)（结构、命令、自测门槛与陷阱）；
-> 本文面向人类贡献者。
+# Contributing to dsh-oc
 
-dsh-oc 是 DeepSeek Harness × OpenCode TUI 前端：dsh 负责全部后端逻辑，opencode
-官方 TUI 只负责渲染与键盘，dsh-oc 在 dsh 进程内提供 OpenCode 兼容的 HTTP/SSE
-bridge。仓库：`chiro2001/dsh-oc`，npm 包名 `@chiro2001/dsh-oc`（未发布
-registry，安装/更新走 GitHub 源）。
+> AI agents taking over the repository should read [AGENTS.md](AGENTS.md) first (structure, commands, self-test gates, and traps). This document is for human contributors.
 
-## 开发环境
+dsh-oc is a DeepSeek Harness × OpenCode TUI frontend: dsh owns all the backend logic, the
+official opencode TUI only renders and handles the keyboard, and dsh-oc provides an
+OpenCode-compatible HTTP/SSE bridge inside the dsh process. Repository: `shibadogcap/dsh-oc`,
+npm package name `@chiro2001/dsh-oc` (not published to the registry; install and update go
+through the GitHub source).
 
-要求：Node.js 22+、pnpm 11.x。
+## Development environment
+
+Requirements: Node.js 22+, pnpm 11.x.
 
 ```bash
 pnpm install
-pnpm build          # 产出 lib/（必须随提交一起推送，GitHub 直装才包含新逻辑）
+pnpm build          # produces lib/ (must be pushed with the commit; a direct GitHub install picks up new logic only when lib/ is committed)
 pnpm typecheck      # tsc --noEmit
-pnpm test           # vitest 单测
-pnpm run probe      # opencode 1.18.18 协议路由探针
-pnpm run perf       # 会话性能压测（临时 DSH_HOME + mock）
-pnpm run features:update   # 刷新 docs/FEATURES.md 的自动追踪部分
+pnpm test           # vitest unit tests
+pnpm run probe      # opencode 1.18.18 protocol route probe
+pnpm run perf       # session performance load test (temporary DSH_HOME + mock)
+pnpm run features:update   # refresh the auto-tracked parts of docs/FEATURES.md
 ```
 
-一键自测入口：
+One-shot self-test entry point:
 
 ```bash
-bash scripts/check-all.sh              # typecheck + 单测 + 探针 + 性能冒烟
-bash scripts/check-all.sh --e2e        # 加跑全量 e2e（含真实 opencode TUI）
-bash scripts/check-all.sh --scale 5000 # 加跑 5000 会话压测
+bash scripts/check-all.sh              # typecheck + unit tests + probe + perf smoke
+bash scripts/check-all.sh --e2e        # also runs the full e2e suite (including the real opencode TUI)
+bash scripts/check-all.sh --scale 5000 # also runs the 5000-session load test
 ```
 
-本地直连 dsh profile（实时验证，`pnpm build` 后立即生效）：
+Local direct connection to the dsh profile (live verification, effective right after `pnpm build`):
 
 ```bash
 dsh plugin --profile oc add .
 ```
 
-从 GitHub 分支安装（验证远端构建产物）：
+Install from a GitHub branch (verifies the remote build artifacts):
 
 ```bash
-dsh plugin --profile oc add 'github:chiro2001/dsh-oc#<branch>'
+dsh plugin --profile oc add 'github:shibadogcap/dsh-oc#<branch>'
 ```
 
-## 分支策略
+## Branch strategy
 
-- `main`：稳定发布线，README 安装/更新命令默认指向 `#main`。
-- `develop`：集成交付线，日常开发与用户实时验证都在这条线；功能稳定后合并回
-  `main`。
-- 功能分支：从 `develop` 拉出，短生命周期，PR 回 `develop`。命名统一为
-  `feat-*` / `fix-*` / `docs-*` / `perf-*` / `test-*` / `chore-*`（小写
-  kebab-case）。
-- 历史遗留的 `feat-*` 分支已全部并入 `main`，属于可清理分支；用
-  `scripts/cleanup-merged-branches.sh` 列出/删除（默认 dry-run）。
+- `main`: stable release line; the README install and update commands point at `#main` by default.
+- `develop`: integration delivery line; day-to-day development and live user verification both happen
+  on this line. Merge back into `main` once features are stable.
+- Feature branches: cut from `develop`, short-lived, PR back to `develop`. Names follow
+  `feat-*` / `fix-*` / `docs-*` / `perf-*` / `test-*` / `chore-*` (lowercase
+  kebab-case).
+- The legacy `feat-*` branches are all merged into `main` and can be cleaned up; use
+  `scripts/cleanup-merged-branches.sh` to list and delete them (dry-run by default).
 
-e2e 脚本只允许在 `main` / `develop` 与 `chore-*` / `fix-*` / `docs-*` /
-`perf-*` / `test-*` / `feat-*` 上运行（与 CI 触发分支一致），防止误在临时
-分支上跑出无效结果。
+e2e scripts may only run on `main` / `develop` and on `chore-*` / `fix-*` / `docs-*` /
+`perf-*` / `test-*` / `feat-*` (matching the CI trigger branches), so a temporary branch
+cannot produce meaningless results by accident.
 
-## 提交规范
+## Commit conventions
 
-- 使用 Conventional Commits：`feat` / `fix` / `docs` / `perf` / `test` /
-  `chore` / `refactor`。
-- `lib/` 是构建产物但必须随源码提交；忘记提交会导致 GitHub 直装跑旧逻辑。
-- 提交前检查机器相关绝对路径：
+- Use Conventional Commits: `feat` / `fix` / `docs` / `perf` / `test` /
+  `chore` / `refactor`.
+- `lib/` is a build artifact but must be committed with the source; forgetting it makes a
+  direct GitHub install run the old logic.
+- Before committing, check for machine-specific absolute paths:
   `rg -n --hidden -g '!node_modules' -g '!.git' 'chiro' . | rg -v 'chiro2001|/home/chiro/'`
-- 涉及能力清单时运行 `pnpm run features:update` 并一并提交。
+- When the capability list is involved, run `pnpm run features:update` and commit the result.
 
-## 自测门槛（PR 前必须）
+## Self-test gates (required before a PR)
 
-1. `pnpm typecheck && pnpm test` 全绿。
-2. `pnpm run probe` 63/63 通过。
-3. 协议/桥接改动：至少跑对应的 `scripts/e2e-api*.sh`。
-4. TUI 改动：跑相关 `scripts/e2e-tui-*.sh`（boot/turn/mini/brand/continue 等）；
-   完整回归用 `bash scripts/check-all.sh --e2e`。
-5. 构建产物/发布改动：跑 `bash scripts/verify-release-artifacts.sh`
-   （lib 零差异、pack 无绝对路径/无 src 泄漏）；候选发布演练见
-   `docs/RELEASE.md`。
-6. 在 PR 描述里附上测试命令与结果摘要。
+1. `pnpm typecheck && pnpm test` all green.
+2. `pnpm run probe` passes 63/63.
+3. Protocol or bridge changes: run at least the matching `scripts/e2e-api*.sh`.
+4. TUI changes: run the relevant `scripts/e2e-tui-*.sh` (boot/turn/mini/brand/continue and so on);
+   for a full regression use `bash scripts/check-all.sh --e2e`.
+5. Build artifact or release changes: run `bash scripts/verify-release-artifacts.sh`
+   (zero diff in lib, no absolute paths and no src leakage in pack); for a release candidate
+   rehearsal see `docs/RELEASE.md`.
+6. Attach the test commands and a result summary to the PR description.
 
-## 提交流程
+## Submission flow
 
-1. 从 `develop` 拉取短生命周期分支。
-2. 实现并补齐单测/e2e，按上面门槛自测。
-3. `pnpm run features:update`（如涉及能力）并提交。
-4. 开 PR 到 `develop`，描述改动、影响面与测试证据。
-5. CI 绿、review 通过后合并；需要用户实时验证的改动随 develop 生效。
-6. 稳定后由维护者把 `develop` 合并回 `main` 并推送。
+1. Cut a short-lived branch from `develop`.
+2. Implement the change and add unit/e2e coverage, then self-test against the gates above.
+3. Run `pnpm run features:update` (when capabilities are involved) and commit.
+4. Open a PR to `develop` describing the change, the blast radius, and the test evidence.
+5. Merge once CI is green and review passes; changes that need live user verification take effect
+   with develop.
+6. Once stable, a maintainer merges `develop` back into `main` and pushes.
 
-## Issue 与 PR 模板
+## Issue and PR templates
 
-仓库提供 `.github/ISSUE_TEMPLATE/`（bug / feature）与
-`.github/pull_request_template.md`，按模板填写即可。
+The repository provides `.github/ISSUE_TEMPLATE/` (bug / feature) and
+`.github/pull_request_template.md`; fill them in as the templates ask.

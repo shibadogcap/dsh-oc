@@ -1,0 +1,233 @@
+*[English](MANUAL-TEST.md) · [日本語](MANUAL-TEST.ja.md) · 中文*
+# dsh-oc 手动测试指引
+
+本文档列出手动验证 dsh-oc 的推荐路径与预期行为，供发布前或升级后快速
+回归；自动化覆盖见 [FEATURES.md](FEATURES.zh.md) 与 `scripts/e2e-*.sh`。
+
+前置：发布线使用 `dsh plugin --profile oc add 'github:shibadogcap/dsh-oc#feat-opencode-2-1'`；测试本地工作树时
+使用 `dsh plugin --profile oc add .` 并执行 `pnpm build`。在干净终端执行
+`dsh --profile oc`；profile 名称固定为 `oc`。
+
+## 1. 启动与品牌
+
+- 预期：启动画面显示 **DSH OC** 字符画（不再是 OPENCODE），随后进入
+  opencode TUI，底部显示 opencode `2.1.0`。
+- 试：`dsh --profile oc`；`dsh --profile oc --help` 显示能力摘要。
+
+## 2. 基础对话
+
+- 新会话输入一句普通文本（如“只回复 OK”）。
+- 预期：模型回复正常出现；输入期间有流式效果；状态栏显示模型与耗时。
+- 试：会话列表（`ctrl+x l` 打开 Sessions 列表）能看到该会话并显示真实标题（标题 →
+  目录名 → id 回退）；`--continue` / `--session <id>` 恢复后历史完整。
+- 排队：给一个长任务（如“写 300 字短文并逐句输出”），模型运行中再输入一条
+  短消息。预期第二条立即以 QUEUED 标记出现，第一条完成后自动开始处理第二条
+  （真实模型实测通过；命令行/API 发送同样生效）。
+
+## 3. 工具与权限
+
+让模型执行需要提权的命令（如 `ls` 前加“执行命令”），触发
+`Permission required` 对话框：
+
+- `Allow once`：仅本次放行；同会话再次触发仍会询问。
+- `Allow always`：弹出确认；同会话同工具后续自动放行；新会话仍会询问；
+  重启后记忆清空。
+- `Reject`：命令不执行，TUI 显示拒绝标记/错误，文件不被写入。
+- `Esc`：standard 模式等价 Reject；`--mini` 先弹 “Reject permission”
+  确认层，按 Enter 提交。
+- 提问对话框（`ask_user_question`）：`Down`/`Up` 切换选项，Enter 提交；
+  Esc 取消，`/question` 清空且回合结束。
+
+## 4. 打断与取消
+
+- 模型输出长文本时：全量 TUI 与 `--mini` 都连按两次 Esc，应停止
+  在途流并回到可输入状态；thinking 指示不应一直转圈。
+- 流式出错（如 SSE 无 `[DONE]` 或鉴权失败）：侧边栏应显示可读的错误
+  文本（如 “SSE stream ended without [DONE]”），而不是 `[object Object]`。
+
+## 5. 退出提示
+
+- 会话有内容时退出（`exit`）：官方 opencode splash（logo + session id）
+  照常显示，其下方 dsh-oc 补一行说明：session id 是 dsh 会话 id，恢复用
+  `dsh --profile oc --session <id>`。
+- `DSH_OC_DISABLE_EXIT_NOTE=1` 可关闭说明；空白会话退出不显示 splash。
+
+## 6. agent / preset
+
+- 空白会话：`/preset` 列出可用 preset；`/preset minimal` 或 Tab 切换 agent 生效，
+  之后新建会话继承最近选择。
+- `/preset minimal` 完成后，`preset switched to minimal` 卡片应立即结束，不能
+  持续显示 `QUEUED`；无需再发送下一条消息才能清除。
+- 已开始回复的会话：切换应被 dsh 锁定，切换后第一条消息出现一次
+  “Agent switch locked”提示，而不是静默失败。
+
+## 7. `!` shell mode
+
+- 在官方 OpenCode TUI 输入框按 `!` 进入 Shell mode，输入
+  `printf DSH_OC_SHELL_OK` 后回车。
+- 预期显示一张 `bash` 工具卡，状态从 running 变为 completed，输出只出现一次，
+  不触发模型回复；API history 中对应 tool part 的 `state.output` 应包含
+  `DSH_OC_SHELL_OK`。随后发送普通问题询问刚才执行的命令，模型应能看到一条明确
+  标注为“用户手动执行”的命令/输出上下文；shell 完成阶段本身不能额外产生模型回合。
+  注意：命令与输出会发送给当前配置的模型，不要在 `!` 中执行会泄露 token、密码或
+  个人数据的命令；过长命令/输出会显示明确截断标记。
+- 验证脚本：`scripts/e2e-tui-shell.sh`。脚本使用独立的 tmux session，普通
+  shell 命令不会杀其他进程；shell 执行继承当前 OS 用户权限，由 Agent maintenance
+  管理 idle ownership，取消只作用于该 session 自己的精确子进程/进程组。
+
+## 8. mini 模式
+
+- `dsh --profile oc --mini`：回复只渲染一次（无重复）；流式回合连按两次
+  Esc 打断；权限 Esc 多一步确认层；退出同第 5 节。
+- `scripts/e2e-tui-mini.sh` 的三次 C-c 可能得到 `DSH_EXIT=130`（SIGINT），
+  这是可接受的退出码；无论 0/130 均需看到 dsh-oc 退出提示。
+
+## 9. subagent / Task 面板
+
+- 让模型调用 `subagent` 或 `subagent_fork`，预期父会话显示原生
+  `Spawn Task` / `Fork Task` 卡片及 delegation description，而不是未知工具卡。
+- Task 卡片应能跳转到实际 child session；child 页面仍显示正确的父会话关系，
+  一次性 child 完成后仍可查看历史。
+- 自动化回归：`scripts/e2e-tui-subagent.sh`（隔离 dsh profile + 官方
+  `opencode --server` + 精确 PID observe-only monitor）。
+
+## 10. 其它入口
+
+- `--dir <path>` 改变工作目录（路径、附件校验基准）；`--fork` 从当前会话
+  派生；`--log-level` 透传给 opencode。
+- 附件：文本与图片可发送；PDF 等二进制应被拒绝（400）。
+- `/goal` 创建/查看/暂停/恢复/完成 goal，sidebar 同步展示。
+  在 TUI 直接输入 `/goal <完整目标>` 应创建完整目标（回归：曾把输入拆成
+  `/goal` + 上一条消息）；自动开启的 goal 回合可用 Esc 打断。
+- `/help` 展示能力摘要；`/preset` 列出 agent preset。
+
+## 11. 协议端点冒烟（可选，开发者）
+
+启动后从 TUI 进程参数取 bridge URL（`opencode --server http://127.0.0.1:<port>`）：
+
+```bash
+B=http://127.0.0.1:<port>
+curl -s $B/api/health                       # {"healthy":true}
+curl -s $B/api/vcs                          # 当前 git 分支/默认分支
+curl -s $B/api/fs/read/README.md            # 工作区文件内容
+curl -s $B/api/fs/list                      # 工作区目录
+curl -s "$B/api/fs/find?query=README"       # 文件查找
+curl -s $B/api/permission/request           # 无 pending 时 {"data":[]}
+```
+
+## 12. 已知限制复核
+
+- `Allow always` 重启清空；MCP/LSP/formatter/integration/reference 为
+  schema-valid stub；opencode 退出 splash 无法替换（只有下方说明）；
+  `ask_user_question` 的 `multiple` 选项在官方 TUI 中无可视多选交互。
+
+## 13. 与官方 opencode 的显示对比（2.1.0 + 本地 mock）
+
+在同一 mock provider 下逐项对比官方 `opencode --server` 与 dsh-oc：
+
+- 启动画面：官方显示 OPENCODE 字符画；dsh-oc 显示 DSH OC 字符画。
+- 基础对话：用户消息与助手回复均只渲染一次；思考期间显示 `+ Thought`，
+  完成后显示模型与耗时。
+- 工具调用：执行中只显示一张工具卡（`$ <command>`），完成后追加输出；
+  不出现“同一次调用显示两次”或“命令卡 + 结果卡并存”的重复。
+- 排队输入：模型忙碌时提交新消息，立即出现 QUEUED 卡片，第一条完成后
+  该消息自动开始处理；不出现同一消息两张卡片。
+- 退出：官方 splash（logo + session id）与 dsh-oc 的说明行都正常显示。
+- 普通文本回复（含 reasoning）与用户消息均只渲染一次；工具调用执行中
+  只显示一张工具卡，完成后显示输出与回合耗时。
+
+复现步骤：`scripts/e2e-tui-queue.sh`、`scripts/e2e-tui-abort.sh`、
+`scripts/e2e-tui-permission.sh` 覆盖上述大部分场景；真实模型回归见
+`scripts/e2e-real-llm.sh`。
+
+已知残余差异（官方 TUI 2.1.0 中观察到的即时显示限制）：工具调用回合的
+后续文本在“忙碌中排队第二条消息”的**即时视图**下可能渲染在排队卡片之后；
+桥接规范化数据已证明 exactly-once、父子正确（v1/v2 历史把工具与后续文本
+合并为同一消息），`--session` 重新进入会话后顺序完全正确；官方 opencode
+同类场景甚至不保留该后续文本。具体归因（renderer vs bridge 事件合法性）
+待官方 2.1.0 最小复现实验闭合。已新增
+`scripts/e2e-queued-order-repro.sh` 复现记录：慢速工具+后续文本流中从键盘
+排队第二条 prompt，逐帧抓拍流式期间面板顺序并冻结归一化 SSE 基线
+（`tests/fixtures/golden/queued-followup-1.18.18.sse.jsonl`）；mock 驱动
+场景连续运行未观察到瞬态错序（61 帧/轮）。真实模型版
+`scripts/e2e-real-queued-order.sh`（manual，真实 DeepSeek API）连续两次
+均复现 wire 前提：后续文本 `message.part.delta` 在排队用户事件
+（seq 107/65）之后继续到达（`wire_follow_after_queued=1`），且流式期间
+面板 45/50 帧存在回复内容渲染在排队卡片下方。综合证据支持“官方 TUI
+即时渲染顺序受排队后到达的后续文本影响”的方向。官方最小 server 归因
+（`scripts/minimal-oc-server.mjs` + `scripts/e2e-minimal-server-repro.sh`）：
+无 dsh/无真实模型，仅用桥组件按脚本化事件序列喂官方 2.1.0 TUI
+（queued-mid-followup fixture：后续文本 part2 在排队用户事件之后到达），
+TUI 仍把完整后续文本渲染在排队卡片上方（顺序正确，95 帧未观察到瞬态错序）。
+该结果指向“错序依赖真实会话中未覆盖的事件交错/消息身份形态”，最终归因
+仍需在最小 server 上复现真实会话的原始事件序列。回合消息的完成时间已推迟
+到回合结束，QUEUED 标记在整轮完成前保持正确。
+
+## 14. 进程 I/O 观察（安全默认）
+
+`scripts/monitor-process-io.sh` 默认只观察明确指定的 PID，不会结束任何外部
+进程；正常退出默认静默，达到阈值只在 stderr 告警，并继续记录。需要报告正常
+退出时显式加 `--report-exit`。日志为 TSV，包含
+`read_bytes/write_bytes/rchar/wchar/RSS/CPU` 及 CPU 增量：
+日志同时保留当前累计值与本窗口 delta；外部 PID 的首样本只建立 baseline，
+`--start` 自有进程可计入首样本已有计数，并按 PID/starttime 防止子进程退出或
+PID 复用产生负 delta。
+
+```bash
+scripts/monitor-process-io.sh \
+  --pid <明确PID> --include-descendants --interval 1 \
+  --read-threshold 1073741824 --log /tmp/dsh-oc-io.tsv
+```
+
+需要由监控脚本自行启动并在结束时清理的测试进程，必须显式使用 `--start`；
+只有该模式允许 `--terminate-owned`，且只针对脚本创建并校验过的进程组：
+
+```bash
+scripts/monitor-process-io.sh --start --terminate-owned --samples 10 \
+  --interval 1 --log /tmp/dsh-oc-owned.tsv -- sleep 30
+```
+
+fake TUI binary 的空闲回归：`tests/e2e/fake-opencode-idle.sh`。它证明修复后的
+fake binary 不再因 EOF 忙循环消耗 CPU/I/O。
+
+监控安全自测：`tests/e2e/monitor-process-io-read.sh` 验证 16 MiB 的
+`rchar` 增量和阈值告警；`tests/e2e/monitor-process-io-owned.sh` 验证
+忽略 TERM 的 owned child、root 提前退出后仍存活的 child，以及外部 PID
+终止保护。
+
+真实 TUI e2e 可选设置 `DSH_OC_E2E_MONITOR_IO=1`。此时
+`e2e_tui_wait_attach` 精确取得当前 run 的 `opencode --server` PID，并以
+observe-only 模式采样其进程树；日志和告警分别写入当前
+`E2E_RUN_DIR/opencode-attach-<pid>*.io.tsv` / `.io.warn`，告警仍同步到 stderr。
+默认采样间隔为 `0.25s`、read 窗口阈值为 `32MiB`，可用
+`DSH_OC_E2E_MONITOR_INTERVAL` 与 `DSH_OC_E2E_MONITOR_READ_THRESHOLD` 覆盖。
+该接线不传 `--terminate-owned`，不会按名称结束 TUI；目标退出后监控自然结束。
+对应的无 TUI shell 回归为 `tests/e2e/monitor-process-io-attach.sh`。
+
+## 15. Profile 隔离与 dsh-tui 排障
+
+- dsh-oc 只应通过 `dsh --profile oc` 启动；bridge 的兼容 shim 只存在于该
+  dsh 进程，不会污染 `tui` 或 `dsh-tui` profile。
+- dsh-tui launcher 固定使用 `dsh --profile dsh-tui`。`dsh --profile tui` 是另一个
+  profile，可能为空或只有 dsh-base；先用以下只读命令确认实际组合树：
+
+  ```bash
+  dsh --profile oc --dump-config
+  dsh --profile tui --dump-config
+  dsh --profile dsh-tui --dump-config
+  ```
+
+- 如果明确要使用名为 `tui` 的 profile，可考虑以下建议命令；本轮没有替用户
+  profile 执行，也不要额外添加旧版 dsh-dcp：
+
+  ```bash
+  dsh plugin --profile tui add '@deepseek-harness-tui/dsh-tui@0.10.0-beta.5'
+  dsh --profile tui
+  ```
+
+  全局 `dsh-tui` 命令仍固定查找 `dsh-tui` profile，不会自动转向 `tui`。
+
+- 若 dsh-tui 显示 `turn error · events is not iterable`，检查 dsh-dcp 是否仍
+  读取 `session.events`。dsh 0.1.2 的接口是 `session.snapshotEvents()`；应升级
+  dsh-dcp，或在 dsh-tui 的 profile patch/临时诊断 overlay 中禁用 `dcp`。不要把
+  dsh-oc 安装到 dsh-tui profile，这不会修复 ABI 不兼容，也会混淆 profile 隔离。

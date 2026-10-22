@@ -100,11 +100,16 @@ declare function cleanupOpenCodeNativeTemp(directory: string): number;
 declare function prepareOpenCodeTemp(dshHome: string, pid?: number, isAlive?: (pid: number) => boolean): string;
 //#endregion
 //#region src/help.d.ts
+/** Languages the help screen is written in; English is the default. */
+type HelpLanguage = 'en' | 'ja' | 'zh';
+/** `DSH_OC_LANG=ja` / `zh` selects another language; anything else is English. */
+declare function helpLanguageFromEnv(env?: NodeJS.ProcessEnv): HelpLanguage;
 /**
  * `dsh --profile oc --help` and TUI `/help` output; kept deliberately static
- * so it works offline and is identical across entry points.
+ * so it works offline and is identical across entry points. English is the
+ * default; `DSH_OC_LANG=ja` or `zh` selects another language.
  */
-declare function ocHelp(version?: string): string;
+declare function ocHelp(version?: string, language?: HelpLanguage): string;
 /** Whether the raw dsh args request the dsh-oc help screen. */
 declare function helpRequested(args: readonly string[]): boolean;
 //#endregion
@@ -291,5 +296,5 @@ declare class OcTuiService extends Service {
   private fail;
 }
 //#endregion
-export { type BinaryResolverDeps, type BinarySource, DSH_OC_TUI_TIMESTAMPS, OPENCODE_BRANDING_PLUGIN, OPENCODE_CONFIG_FILE, OPENCODE_KV_FILE, OPENCODE_NETWORK_SAFETY_ENV, OPENCODE_TUI_FILE, OcTuiConfig, OcTuiService, OcTuiService as default, ResolveBinaryInput, type ResolvedBinary, RunningTui, SignalListener, SignalProcessLike, SpawnTui, StartTuiOptions, TimerClearer, TimerHandle, TimerSetter, TuiChild, brandingSourceDir, buildChildEnv, cleanupOpenCodeNativeTemp, exitNoteEnabled, filterSupportedArgs, helpRequested, installSignalForwarding, ocExitNote, ocHelp, opencodeTuiTempDir, prepareOpenCodeConfig, prepareOpenCodeTemp, prepareOpenCodeTuiState, processAlive, requestExit, resolveAssetUrl, resolveOpenCodeBinary, resolveTuiDir, startOpenCodeTui, tuiDirFromArgs, tuiSessionFromArgs, tuiTimestampsEnabled };
+export { type BinaryResolverDeps, type BinarySource, DSH_OC_TUI_TIMESTAMPS, OPENCODE_BRANDING_PLUGIN, OPENCODE_CONFIG_FILE, OPENCODE_KV_FILE, OPENCODE_NETWORK_SAFETY_ENV, OPENCODE_TUI_FILE, OcTuiConfig, OcTuiService, OcTuiService as default, ResolveBinaryInput, type ResolvedBinary, RunningTui, SignalListener, SignalProcessLike, SpawnTui, StartTuiOptions, TimerClearer, TimerHandle, TimerSetter, TuiChild, brandingSourceDir, buildChildEnv, cleanupOpenCodeNativeTemp, exitNoteEnabled, filterSupportedArgs, helpLanguageFromEnv, helpRequested, installSignalForwarding, ocExitNote, ocHelp, opencodeTuiTempDir, prepareOpenCodeConfig, prepareOpenCodeTemp, prepareOpenCodeTuiState, processAlive, requestExit, resolveAssetUrl, resolveOpenCodeBinary, resolveTuiDir, startOpenCodeTui, tuiDirFromArgs, tuiSessionFromArgs, tuiTimestampsEnabled };
 //# sourceMappingURL=index.d.ts.map

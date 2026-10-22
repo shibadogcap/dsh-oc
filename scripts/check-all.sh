@@ -31,6 +31,9 @@ pnpm typecheck
 echo "== unit tests =="
 pnpm test
 
+echo "== documentation languages =="
+node scripts/check-docs-i18n.mjs
+
 echo "== protocol probe =="
 pnpm run probe
 

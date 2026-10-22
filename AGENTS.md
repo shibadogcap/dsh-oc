@@ -1,17 +1,16 @@
-# AGENTS.md — dsh-oc 开发/Agent 指南
+*English · [日本語](AGENTS.ja.md) · [中文](AGENTS.zh.md)*
 
-本文件面向接手本仓库的 AI Agent 与开发者，替代 README 中的开发章节。
-使用者文档见 [README.md](README.md)；人类贡献流程见
-[CONTRIBUTING.md](CONTRIBUTING.md)。
+# AGENTS.md — dsh-oc development/agent guide
 
-## 项目是什么
+This file is for the AI agents and developers who take over this repository, and it replaces the development sections of the README. User documentation is in [README.md](README.md); the human contribution process is in [CONTRIBUTING.md](CONTRIBUTING.md).
 
-dsh-oc 是 DeepSeek Harness（dsh）的 OpenCode TUI 前端：
+## What the project is
 
-- **前端**：官方 opencode CLI（`--server` 模式），只负责渲染、键盘、终端生命周期。
-- **后端**：dsh 负责 Agent、Session、工具、模型、权限、提问。
-- **桥接**：dsh-oc 在 dsh 进程内提供 OpenCode 兼容的 HTTP/SSE 服务（`oc-bridge`），
-  并启动官方 TUI 子进程（`oc-tui`）。
+dsh-oc is the OpenCode TUI front end for DeepSeek Harness (dsh):
+
+- **Front end**: the official opencode CLI (`--server` mode), responsible only for rendering, keyboard, and terminal lifecycle.
+- **Back end**: dsh handles agents, sessions, tools, models, permissions, and questions.
+- **Bridge**: dsh-oc serves an OpenCode-compatible HTTP/SSE service (`oc-bridge`) inside the dsh process and starts the official TUI child process (`oc-tui`).
 
 ```text
 dsh (Node) ── dsh-oc bundle ── oc-bridge (HTTP/SSE) <── opencode TUI (--server)
@@ -19,330 +18,177 @@ dsh (Node) ── dsh-oc bundle ── oc-bridge (HTTP/SSE) <── opencode TUI
                   └─ DSH Agent/Session/Tools/LLM/Approval/Questions
 ```
 
-仓库：`chiro2001/dsh-oc`；npm 包名 `@chiro2001/dsh-oc@0.2.0-rc.4`（未发布
-registry，安装/更新走 GitHub 源 `#main` / `#develop`）。
+Repository: `shibadogcap/dsh-oc`; npm package name `@chiro2001/dsh-oc@0.2.0-rc.4` (not published to a registry, so install/update go through the GitHub source `#main` / `#develop`).
 
-当前 prerelease 面向 dsh `>=0.1.5-rc.2`（0.2.0-rc.3 及以前面向
-`>=0.1.2-rc.1`，事件模型不兼容，不再支持）。PR #1/#2/#3 没有原样合入；RC 版本将其
-有效语义与 dsh host-services 迁移重新整合，详见 CHANGELOG。
+The current prerelease targets dsh `>=0.1.5-rc.2` (0.2.0-rc.3 and earlier target `>=0.1.2-rc.1`, whose event model is incompatible and no longer supported). PR #1/#2/#3 were not merged as-is; the RC version re-integrates their valid semantics with the dsh host-services migration. See the CHANGELOG for details.
 
-## 代码结构
+## Code structure
 
 ```text
 src/
-  bridge/            # OpenCode 协议桥
-    router.ts        # 核心：SSE、缓存/预取、命令/权限 helper、桥服务接线
-    routes/          # 路由注册（按域拆分，聚合于 routes.ts）
-      boot.ts        # 启动与目录路由（/api/info /api/location /api/agent /api/model ...）
-      session-v2.ts  # 会话路由（列表、消息、prompt、interrupt、command、fork）
-      fs.ts          # 工作区文件读取/列表/查找路由
-    routes.ts        # 聚合器（注册顺序即匹配顺序，勿乱）
-    events.ts        # SSE 事件翻译（assistant-stream、turn.*、message.*、session.*、工具流、权限）
-    state.ts         # 桥内存状态（缓存、标题、preset、活动标记）
-    file-uploads.ts  # dsh 0.1.5 headless fileUploads provider（见下）
-    convert/         # dsh 事件 → opencode 消息/会话/模型/权限转换
+  bridge/            # OpenCode protocol bridge
+    router.ts        # core: SSE, cache/prefetch, command/permission helpers, bridge service wiring
+    routes/          # route registration (split by domain, aggregated in routes.ts)
+      boot.ts        # boot and directory routes (/api/info /api/location /api/agent /api/model ...)
+      session-v2.ts  # session routes (list, messages, prompt, interrupt, command, fork)
+      fs.ts          # workspace file read/list/find routes
+    routes.ts        # aggregator (registration order is match order, do not reorder)
+    events.ts        # SSE event translation (assistant-stream, turn.*, message.*, session.*, tool streams, permissions)
+    state.ts         # bridge in-memory state (caches, titles, preset, activity markers)
+    file-uploads.ts  # dsh 0.1.5 headless fileUploads provider (see below)
+    convert/         # dsh events → opencode message/session/model/permission conversion
     http.ts sse.ts rpc.ts errors.ts stubs.ts git.ts fs.ts
-    web-ui.ts        # 官方 opencode Web UI：AppArchive 展开 + 静态文件伺服
-  rewind/            # 回退插件：session fork + 按回合分组的文件快照（copy-on-write）
-  tui/               # opencode 子进程解析/下载/spawn、信号转发、退出处理
-  help.ts            # --help / /help 静态能力摘要
-tui-branding/        # DSH OC 品牌 logo TUI 插件
-scripts/             # 自测/压测/能力矩阵/清理工具
-tests/               # vitest 单测 + e2e（scripts/e2e-*）
+    web-ui.ts        # official opencode Web UI: AppArchive extraction + static file serving
+  rewind/            # revert plugin: session fork + file snapshots grouped by turn (copy-on-write)
+  tui/               # opencode child process resolve/download/spawn, signal forwarding, exit handling
+  help.ts            # --help / /help static capability summary
+tui-branding/        # DSH OC brand logo TUI plugin
+scripts/             # self-test/load-test/capability matrix/cleanup tools
+tests/               # vitest unit tests + e2e (scripts/e2e-*)
 docs/                # FEATURES / PROTOCOL / ROADMAP / CHANGELOG / perf
-lib/                 # 构建产物（必须随提交推送，GitHub 直装依赖它）
+lib/                 # build output (must be pushed with commits; GitHub direct install depends on it)
 ```
 
-## 常用命令
+## Common commands
 
 ```bash
 pnpm install
 pnpm build                 # tsdown → lib/
 pnpm typecheck             # tsc --noEmit
 pnpm test                  # vitest
-pnpm run probe             # opencode 2.1.0 协议路由探针（覆盖官方 client 全部路由）
-pnpm run e2e               # 全量 e2e（真实 opencode TUI，稳定套件约 15–20 分钟）
-pnpm run e2e:api           # API e2e 子集（快速回归）
-pnpm run perf              # 会话性能压测（--sessions N --scale ...）
-pnpm run features:update   # 刷新 docs/FEATURES.md 自动追踪
-bash scripts/check-all.sh --e2e          # 一键全量门槛
+pnpm run probe             # opencode 2.1.0 protocol route probe (covers every route of the official client)
+pnpm run e2e               # full e2e (real opencode TUI, stable suite takes about 15–20 minutes)
+pnpm run e2e:api           # API e2e subset (fast regression)
+pnpm run perf              # session performance load test (--sessions N --scale ...)
+pnpm run features:update   # refresh docs/FEATURES.md auto-tracking
+bash scripts/check-all.sh --e2e          # one-shot full gate
 bash scripts/check-all.sh --e2e --scale 5000
-bash scripts/verify-release-artifacts.sh # 发布工件审计（check-all 内置：lib 零差异、pack 无绝对路径、产物哈希）
-bash scripts/e2e-install-rollback.sh     # manual：远端 full SHA 冷装 + TUI smoke + 回滚演练
-bash scripts/cleanup-e2e-runs.sh --keep 20 --apply   # 清理 .e2e 旧 run（默认 dry-run）
+bash scripts/verify-release-artifacts.sh # release artifact audit (built into check-all: zero lib diff, no absolute paths in pack, artifact hashes)
+bash scripts/e2e-install-rollback.sh     # manual: remote full-SHA cold install + TUI smoke + rollback drill
+bash scripts/cleanup-e2e-runs.sh --keep 20 --apply   # clean old .e2e runs (dry-run by default)
 bash scripts/replay-session-audit.sh <session.jsonl[.zstd]>
-                                          # 真实会话回放审计：桥翻译无未处理事件/错误
+                                          # real session replay audit: bridge translation has no unhandled events/errors
 bash scripts/audit-local-sessions.sh [sessions-dir]
-                                          # 批量审计 $DSH_HOME/sessions 全部会话（含消息 id/role 冲突检查）
-bash scripts/e2e-recovery-crash.sh        # 故障域：SIGKILL 中途崩溃后 --session 重启恢复
-bash scripts/e2e-recovery-sse-reconnect.sh # 故障域：观察者 SSE 断流重连后 exactly-once
-node scripts/build-replay-corpus.mjs      # 重新生成 tests/fixtures/replay 合成语料（结构保持，无真实内容）
-node scripts/replay-corpus-manifest.mjs   # 扫描真实会话的 feature 覆盖，输出语料覆盖差集（无内容外泄）
-bash scripts/e2e-golden-trace.sh          # 冻结/校验 1.18.18 事件形状的黄金 SSE 轨迹（DSH_OC_GOLDEN_OVERWRITE=1 刷新）
-bash scripts/e2e-queued-order-repro.sh    # 工具+排队+后续文本的官方 TUI 顺序复现记录
+                                          # batch audit every session under $DSH_HOME/sessions (includes message id/role conflict checks)
+bash scripts/e2e-recovery-crash.sh        # failure domain: --session restart recovery after a mid-run SIGKILL
+bash scripts/e2e-recovery-sse-reconnect.sh # failure domain: exactly-once after an observer SSE stream drop and reconnect
+node scripts/build-replay-corpus.mjs      # regenerate the synthetic tests/fixtures/replay corpus (structure preserved, no real content)
+node scripts/replay-corpus-manifest.mjs   # scan real sessions for feature coverage, output the corpus coverage gap (no content leaked)
+bash scripts/e2e-golden-trace.sh          # freeze/verify the golden SSE trace of 1.18.18 event shapes (refresh with DSH_OC_GOLDEN_OVERWRITE=1)
+bash scripts/e2e-queued-order-repro.sh    # record the official TUI ordering repro for tool + queue + trailing text
 bash scripts/upgrade-lane.sh --bin <candidate>
-                                          # 候选 opencode 升级 lane：黄金轨迹语义差分
+                                          # candidate opencode upgrade lane: golden trace semantic diff
 bash scripts/update-local-install.sh [ref]
-                                          # 更新本地 dsh profile 安装并校验 resolved commit/version
-bash scripts/e2e-real-queued-order.sh     # manual：真实模型排队错序 wire/面板证据
-bash scripts/e2e-minimal-server-repro.sh  # 官方最小 server 归因：脚本化事件 → 官方 TUI 渲染顺序
-scripts/monitor-process-io.sh --pid <pid> --log <tsv> # 默认 observe-only，正常退出静默
-scripts/e2e-tui-subagent.sh             # dsh subagent → OpenCode task + child 导航
-scripts/e2e-tui-shell.sh                # 官方 TUI `!` shell → OS shell tool card
-tests/e2e/fake-opencode-idle.sh           # fake TUI 空闲无 EOF 忙循环回归
-tests/e2e/monitor-process-io-attach.sh    # exact TUI PID/log/无目标 kill shell 回归
- ```
-
-本地直连 dsh profile（实时验证）：`dsh plugin --profile oc add .`；改代码后
-`pnpm build` 立即生效（link 方式）。从 GitHub 分支安装验证：
-`dsh plugin --profile oc add 'github:chiro2001/dsh-oc#<branch>'`。`#develop`
-是可变 ref，pnpm 可能复用旧解析 SHA；重复执行 add 会刷新锁文件，用
-`rg 'codeload.github.com/chiro2001/dsh-oc/tar.gz' pnpm-lock.yaml` 核对实际
-解析到的 commit。
-
-## 安装、更新与本地开发
-
-使用者只关心安装命令时见 README；Agent/开发者用以下方式验证与更新：
-
-GitHub 源安装/更新（与 README 同款命令，重复执行即更新到该分支最新）：
-
-```bash
-dsh plugin --profile oc add chiro2001/dsh-oc                       # #main
-dsh plugin --profile oc add 'github:chiro2001/dsh-oc#develop'      # 指定分支
-dsh --profile oc --help                                            # 验证版本
+                                          # update the local dsh profile install and verify resolved commit/version
+bash scripts/e2e-real-queued-order.sh     # manual: real model queue misorder wire/panel evidence
+bash scripts/e2e-minimal-server-repro.sh  # official minimal server attribution: scripted events → official TUI render order
+scripts/monitor-process-io.sh --pid <pid> --log <tsv> # observe-only by default, silent on normal exit
+scripts/e2e-tui-subagent.sh             # dsh subagent → OpenCode task + child navigation
+scripts/e2e-tui-shell.sh                # official TUI `!` shell → OS shell tool card
+tests/e2e/fake-opencode-idle.sh           # fake TUI idle-without-EOF busy loop regression
+tests/e2e/monitor-process-io-attach.sh    # exact TUI PID/log/no-target-kill shell regression
 ```
 
-- `bin/dsh-oc.mjs` 提供 `dsh-oc` 简写（`dsh --profile oc` 参数透传、退出码
-  透传）；安装后位于 profile 的 `node_modules/.bin`，README 提供 PATH 指引；
-  本机可直接 `ln -sf ~/.dsh/profiles/oc/node_modules/.bin/dsh-oc
-  ~/.local/bin/dsh-oc` 让简写常驻 PATH。
-- npm 包名 `@chiro2001/dsh-oc` 未发布 registry；安装/更新一律走 GitHub 源。
-- 本地开发：`dsh plugin --profile oc add .` 以 `link:` 方式链接仓库，改
-  `src/` 后 `pnpm build` 立即生效；但 `lib/` 必须随提交推送，GitHub 直装才
-  会包含最新构建产物。
+Local direct connection to a dsh profile (live verification): `dsh plugin --profile oc add .`; after changing code, `pnpm build` takes effect immediately (link mode). Install from a GitHub branch for verification: `dsh plugin --profile oc add 'github:shibadogcap/dsh-oc#<branch>'`. `#develop` is a mutable ref, and pnpm may reuse an old resolved SHA; re-running add refreshes the lockfile, so check the commit that actually resolved with `rg 'codeload.github.com/shibadogcap/dsh-oc/tar.gz' pnpm-lock.yaml`.
 
-## opencode 二进制与网络策略
+## Install, update, and local development
 
-- 直接使用官方 opencode 二进制，版本锁定 `opencode-version.json`（当前
-  `2.1.0`）；启动时 `resolveOpenCodeBinary` + `verifyOpenCodeVersion` 双重
-  校验，显式 `DSH_OC_OPENCODE_BIN` 版本不匹配会直接报错，不回退到 PATH 上
-  的其它版本。
-- OpenTUI 2.1.0/Bun 的 native 临时文件泄漏由 dsh-oc 隔离到
-  `$DSH_HOME/opencode/tmp/tui-<pid>`；正常退出清理，下一次启动回收已退出
-  dsh 进程目录。不会搜索任意用户插件缓存，也不会关闭官方版本/完整性校验。
-- 解析优先级：`DSH_OC_OPENCODE_BIN` → `$DSH_HOME/opencode/bin/<version>`
-  → PATH 上版本匹配的 `opencode` → 官方 npm 平台包 `@opencode/cli-<platform>-<arch>`
-  （惰性安装，npm integrity 校验）→ profile 内 `opencode-ai` / `@opencode/cli` 包。
-  2.1.0 起不再维护 `opencode-assets.json`，二进制只从 npm 平台包取得；安装走代理
-  （`HTTPS_PROXY`/`HTTP_PROXY`）与 `DSH_OC_OPENCODE_MIRROR` 镜像前缀。
-- 网络策略：子进程强制 `OPENCODE_DISABLE_AUTOUPDATE=1` /
-  `OPENCODE_DISABLE_MODELS_FETCH=1` / `OPENCODE_DISABLE_LSP_DOWNLOAD=1`，并在
-  隔离配置写 `autoupdate: false`，关闭后台外网行为。
-- 缓存错误时清除 `$DSH_HOME/opencode/bin` 或设置匹配版本的
-  `DSH_OC_OPENCODE_BIN`；`DSH_OC_TUI_TIMESTAMPS=1` 可让 TUI 默认显示时间戳
-  （`ctrl+shift+t` / `/timestamps` 运行时切换）。
-- **官方 Web UI 用同一个二进制**：`src/bridge/web-ui.ts` 把 opencode 二进制里的
-  AppArchive（`packages/cli/src/app-archive.ts` 的格式：小端 u32 的 JSON 索引长度、
-  索引、`[offset, length]` 与 brotli 压缩的资产本体）解到
-  `$DSH_HOME/opencode/web-ui/<version>/`，bridge 自己伺服这些文件。
-  `src/bridge/index.ts` 的 `resolveWebUi()` 查找顺序是 `DSH_OC_WEB_UI` → 解包目录。
-  **二进制只被查找、绝不由 bridge 安装**（`resolveOpenCodeBinary` 传
-  `installNpmPackage: async () => false`）；TUI 插件本来就要装二进制，所以 Web UI
-  从下一次启动起出现。找不到二进制时没有 Web UI，API 不受影响。
-  离线展开用 `node scripts/extract-opencode-web-ui.mjs --bin <二进制> --out <目录>`。
-- **opencode 按 vendor ABI 对待**：升级候选版本必须以“黄金 HTTP/SSE 轨迹 +
-  真实 TUI 回放”的语义差分为门槛，不能只看 SDK 类型与路由数量；为候选
-  新版本建独立 upgrade lane，不直接替换锁定版本。
-- **真实模型回归定位为 smoke**：`scripts/e2e-real-llm.sh` 覆盖真实文本、
-  工具、goal、variant 与 TUI 交互，但随机模型输出不承担桥接正确性的
-  唯一 oracle；确定性回放语料（脱敏真实 session）是更优先的回归手段。
-- **恢复故障域按路径分别验证**：`client-sse-reconnect` /
-  `mux-resubscribe` / `process-crash-recovery` 不是同一条重连路径。共享
-  oracle 在 `tests/e2e/recovery-lib.sh`（v2 签名、权威 idle、前缀/全图
-  比较）；改动 bridge SSE/历史转换时至少跑
-  `e2e-recovery-consistency.sh` + `e2e-recovery-crash.sh` +
-  `e2e-recovery-sse-reconnect.sh`。
+See the README when the user only cares about the install command; agents and developers verify and update as follows.
 
-- **status 热路径**：bridge 从 dsh `api-session/status`/`api-session/activity`
-  维护内存 authoritative map，并通过 SSE `session.status` 事件对外发布；
-  `POST /api/session/:id/wait` 是 2.x 的空闲等待入口。
-- **SSE 断线契约**：`SseHub` 保留受事件数/序列化字节双上限约束的 ring，消费
-  `Last-Event-ID` 严格回放其后的事件；游标淘汰或未知时记录告警并回放当前
-  status/control snapshot。每连接不触发 history/list 扫描。2.x 客户端要求事件流
-  以 `server.connected` 开流，bridge 建连后先发该帧再回放。
-- **e2e TUI I/O 观察**：设置 `DSH_OC_E2E_MONITOR_IO=1` 后，
-  `tests/e2e/common.sh` 在 `e2e_tui_wait_attach` 中精确解析当前 run 的
-  `opencode --server` PID，以 observe-only monitor 记录到该 run 目录；默认
-  `0.25s` / `32MiB` read 窗口可由 `DSH_OC_E2E_MONITOR_INTERVAL` /
-  `DSH_OC_E2E_MONITOR_READ_THRESHOLD` 覆盖。监控随目标退出，不按名称结束目标；
-  必要清理只允许结束 monitor 自身 PID。需要把正常退出写到 stderr 时显式加
-  `--report-exit`；阈值告警无论如何仍写 stderr。
-- **兼容边界**：dsh-dcp rc.6 仍读取已移除的 `session.events`，bridge 暂时
-  安装 `snapshotEvents()` getter shim；dcp 升级到兼容 dsh 0.1.5 后删除。
-- **dsh 0.1.5 host ABI**：
-  - `dsh-api-session-controller` 新增硬依赖 `fileUploads`；官方 provider
-    （`dsh-client-file-upload`）是浏览器传输插件、inject `connection`，oc-bridge 不挂。
-    `@chiro2001/dsh-oc/file-uploads`（`src/bridge/file-uploads.ts`）提供 headless
-    实现，必须在 `cordis.patch.yml` 中插在 `session-controller` 之前；`bindPrompt`
-    必须返回带 `Symbol.dispose` 的对象（0.1.5 用显式资源管理包裹它，普通对象会
-    报 `TypeError: Object not disposable`）。
-  - 实时流：`assistant/chunk` 会话事件已删除；改订阅进程内
-    `agent/assistant-stream`（`start` 带 turn/step，`chunk` 带 attemptId/revision/
-    index + 同一 `StreamChunk` 载荷），`index.ts` 维护 attempt→turn/step 映射并
-    feed `session/assistant-stream` 帧；对缺失 start 的迟到帧直接丢弃。
-  - 持久化历史：`SessionHistoryRecord` 不再有 `chunks`；`assistant/message` /
-    `assistant/attempt` 内嵌 `stream: AssistantStreamRecord[]`。`expandRecord` 把
-    packed run 还原成 `text-chunks`/`reasoning-chunks`/`tool-call-chunks` 行，
-    `assistantStreamTiming` 从 raw `block-start`/`block-end`/`finish` 还原部件时长
-    与 finish reason；`assistant/attempt` 在 live/history 都无 TUI surface。
-  - `dsh-tool-fs` 的 `write`/`edit` 是 0.1.5 的文件工具（`str_replace_editor` 只
-    在 0.1.2 base 行、已 opt-in 化）；新文件 `write` 的 result meta 是空 diffs，
-    bridge 从调用参数合成 diff，保证 opencode edit 卡片有 `metadata.diff`。
-  - **首回合标签**：所有 provisional 卡片（live SSE、流式中的 history 合并、
-    shell 合成卡片）必须用
-    `state.sessionModelSelectionFor()` + `sessionAgentFor()` 取会话实际值，禁止回退
-    到 `build`/`deepseek-chat`；prompt 未携带模型时用
-    部署默认模型回退。TUI 的映射默认 agent
-    `build` 由 `applyAgentFromBody` 解析成部署默认 preset，保证首回合显示真实 preset。
+Install/update from the GitHub source (same commands as the README; re-running updates to the latest of that branch):
 
-## 自测门槛（提交/合并前必须全绿）
+```bash
+dsh plugin --profile oc add 'github:shibadogcap/dsh-oc#feat-opencode-2-1'                       # #main
+dsh plugin --profile oc add 'github:shibadogcap/dsh-oc#feat-opencode-2-1'      # specific branch
+dsh --profile oc --help                                            # verify version
+```
+
+- `bin/dsh-oc.mjs` provides the `dsh-oc` shorthand (passes through `dsh --profile oc` arguments and the exit code); after install it sits in the profile's `node_modules/.bin`, and the README gives PATH guidance; on this machine you can make the shorthand permanent on PATH with `ln -sf ~/.dsh/profiles/oc/node_modules/.bin/dsh-oc ~/.local/bin/dsh-oc`.
+- The npm package name `@chiro2001/dsh-oc` is not published to a registry; install/update always go through the GitHub source.
+- Local development: `dsh plugin --profile oc add .` links the repository as `link:`, so `pnpm build` after changing `src/` takes effect immediately; but `lib/` must be pushed with commits, or a GitHub direct install will not include the latest build output.
+
+## opencode binary and network policy
+
+- Use the official opencode binary directly, with the version pinned in `opencode-version.json` (currently `2.1.0`); startup validates twice with `resolveOpenCodeBinary` + `verifyOpenCodeVersion`, and an explicit `DSH_OC_OPENCODE_BIN` whose version does not match errors out instead of falling back to another version on PATH.
+- Native temp-file leaks from OpenTUI 2.1.0/Bun are isolated by dsh-oc into `$DSH_HOME/opencode/tmp/tui-<pid>`; they are cleaned up on normal exit, and the next start reclaims directories left by dsh processes that have exited. dsh-oc does not scan arbitrary user plugin caches and does not disable the official version/integrity checks.
+- Resolution priority: `DSH_OC_OPENCODE_BIN` → `$DSH_HOME/opencode/bin/<version>` → a version-matching `opencode` on PATH → the official npm platform package `@opencode/cli-<platform>-<arch>` (lazy install, npm integrity check) → the `opencode-ai` / `@opencode/cli` package inside the profile. From 2.1.0 on, `opencode-assets.json` is no longer maintained and the binary comes only from the npm platform package; installs use the proxy (`HTTPS_PROXY`/`HTTP_PROXY`) and the `DSH_OC_OPENCODE_MIRROR` mirror prefix.
+- Network policy: the child process forces `OPENCODE_DISABLE_AUTOUPDATE=1` / `OPENCODE_DISABLE_MODELS_FETCH=1` / `OPENCODE_DISABLE_LSP_DOWNLOAD=1` and writes `autoupdate: false` into the isolated config, which turns off background network activity.
+- On a cache error, clear `$DSH_HOME/opencode/bin` or set a matching `DSH_OC_OPENCODE_BIN`; `DSH_OC_TUI_TIMESTAMPS=1` makes the TUI show timestamps by default (`ctrl+shift+t` / `/timestamps` toggles them at runtime).
+- **The official Web UI uses the same binary**: `src/bridge/web-ui.ts` extracts the AppArchive inside the opencode binary (the format from `packages/cli/src/app-archive.ts`: little-endian u32 JSON index length, index, `[offset, length]`, and brotli-compressed asset bodies) into `$DSH_HOME/opencode/web-ui/<version>/`, and the bridge serves those files itself. The lookup order of `resolveWebUi()` in `src/bridge/index.ts` is `DSH_OC_WEB_UI` → the extracted directory. **The binary is only looked up and never installed by the bridge** (`resolveOpenCodeBinary` receives `installNpmPackage: async () => false`); the TUI plugin has to install the binary anyway, so the Web UI appears from the next start. With no binary there is no Web UI, and the API is unaffected. For offline extraction use `node scripts/extract-opencode-web-ui.mjs --bin <binary> --out <dir>`.
+- **Treat opencode as a vendor ABI**: an upgrade candidate must pass the semantic diff of "golden HTTP/SSE trace + real TUI replay", not only SDK types and route count; create a separate upgrade lane for the candidate version and do not replace the pinned version directly.
+- **Real-model regression is a smoke test**: `scripts/e2e-real-llm.sh` covers real text, tools, goal, variant, and TUI interaction, but random model output is not the sole oracle for bridge correctness; the deterministic replay corpus (redacted real sessions) is the higher-priority regression method.
+- **Recovery failure domains are verified per path**: `client-sse-reconnect` / `mux-resubscribe` / `process-crash-recovery` are not the same reconnect path. The shared oracle is in `tests/e2e/recovery-lib.sh` (v2 signature, authoritative idle, prefix/full-graph comparison); when you change bridge SSE/history translation, run at least `e2e-recovery-consistency.sh` + `e2e-recovery-crash.sh` + `e2e-recovery-sse-reconnect.sh`.
+
+- **status hot path**: the bridge maintains an in-memory authoritative map from dsh `api-session/status`/`api-session/activity` and publishes it over the SSE `session.status` event; `POST /api/session/:id/wait` is the 2.x idle-wait entry point.
+- **SSE disconnect contract**: `SseHub` keeps a ring bounded by both event count and serialized bytes, consumes `Last-Event-ID` and strictly replays the events after it; when the cursor has been evicted or is unknown, it logs a warning and replays the current status/control snapshot. No history/list scan is triggered per connection. 2.x clients require the event stream to open with `server.connected`, so the bridge sends that frame first after connecting and then replays.
+- **e2e TUI I/O observation**: with `DSH_OC_E2E_MONITOR_IO=1` set, `tests/e2e/common.sh` resolves the exact `opencode --server` PID of the current run in `e2e_tui_wait_attach` and records it into that run's directory with an observe-only monitor; the default `0.25s` / `32MiB` read window can be overridden with `DSH_OC_E2E_MONITOR_INTERVAL` / `DSH_OC_E2E_MONITOR_READ_THRESHOLD`. The monitor exits with the target and never ends the target by name; necessary cleanup may only end the monitor's own PID. Add `--report-exit` explicitly to write a normal exit to stderr; threshold warnings still go to stderr either way.
+- **Compatibility boundary**: dsh-dcp rc.6 still reads the removed `session.events`, so the bridge temporarily installs a `snapshotEvents()` getter shim; delete it once dcp is upgraded to a version compatible with dsh 0.1.5.
+- **dsh 0.1.5 host ABI**:
+  - `dsh-api-session-controller` adds a hard dependency on `fileUploads`; the official provider (`dsh-client-file-upload`) is a browser transport plugin that injects `connection`, and oc-bridge does not mount it. `@chiro2001/dsh-oc/file-uploads` (`src/bridge/file-uploads.ts`) provides a headless implementation and must be inserted before `session-controller` in `cordis.patch.yml`; `bindPrompt` must return an object with `Symbol.dispose` (0.1.5 wraps it in explicit resource management, and a plain object raises `TypeError: Object not disposable`).
+  - Live streaming: the `assistant/chunk` session event is removed; subscribe to the in-process `agent/assistant-stream` instead (`start` carries turn/step, `chunk` carries attemptId/revision/index plus the same `StreamChunk` payload), `index.ts` maintains the attempt→turn/step mapping and feeds `session/assistant-stream` frames, and late frames with no matching start are dropped.
+  - Persisted history: `SessionHistoryRecord` no longer has `chunks`; `assistant/message` / `assistant/attempt` embed `stream: AssistantStreamRecord[]`. `expandRecord` restores packed runs into `text-chunks`/`reasoning-chunks`/`tool-call-chunks` rows, and `assistantStreamTiming` restores part durations and the finish reason from raw `block-start`/`block-end`/`finish`; `assistant/attempt` has no TUI surface in either live or history.
+  - `write`/`edit` in `dsh-tool-fs` are the 0.1.5 file tools (`str_replace_editor` exists only on the 0.1.2 base line and is now opt-in); the result meta of a new-file `write` has empty diffs, so the bridge synthesizes the diff from the call arguments to guarantee the opencode edit card has `metadata.diff`.
+  - **First-turn labels**: every provisional card (live SSE, streaming history merge, shell synthesized card) must take the session's actual values through `state.sessionModelSelectionFor()` + `sessionAgentFor()` and must never fall back to `build`/`deepseek-chat`; when the prompt carries no model, fall back to the deployment default model. The TUI's default mapping agent `build` is resolved by `applyAgentFromBody` to the deployment default preset, so the first turn shows the real preset.
+
+## Self-test gate (must be green before commit/merge)
 
 1. `pnpm typecheck && pnpm test`
-2. `pnpm run probe`（63/63）
-3. 涉及协议/桥接/TUI 的改动：至少跑相关 `scripts/e2e-*.sh`；完整回归用
-   `bash scripts/check-all.sh --e2e`
-4. 发布工件审计：`check-all` 内置 `verify-release-artifacts.sh`（HEAD 干净
-   重建后 committed `lib/` 零差异、npm pack 无机器绝对路径、记录产物哈希）；
-   单独跑 `bash scripts/verify-release-artifacts.sh`
-5. `pnpm run features:update`（涉及能力清单时）并提交结果
-6. `lib/` 构建产物随提交；检查机器相关绝对路径：
-   `rg -n --hidden -g '!node_modules' -g '!.git' 'chiro' . | rg -v 'chiro2001|/home/chiro/'`
+2. `pnpm run probe` (63/63)
+3. Changes touching protocol/bridge/TUI: run at least the relevant `scripts/e2e-*.sh`; for full regression use `bash scripts/check-all.sh --e2e`
+4. Release artifact audit: `check-all` includes `verify-release-artifacts.sh` (after a clean rebuild from HEAD, committed `lib/` has zero diff, npm pack contains no machine absolute paths, artifact hashes are recorded); run it standalone with `bash scripts/verify-release-artifacts.sh`
+5. `pnpm run features:update` (when the capability list is involved) and commit the result
+6. `pnpm run docs:check` (every document has its English, Japanese and Chinese variant, with consistent switcher headers and resolving links)
+7. `lib/` build output goes with commits; check for machine-specific absolute paths: `rg -n --hidden -g '!node_modules' -g '!.git' 'chiro' . | rg -v 'chiro2001|/home/chiro/'`
 
-e2e 脚本只允许在 `main` / `develop` 与 `chore-*` / `fix-*` / `docs-*` /
-`perf-*` / `test-*` / `feat-*` 分支运行（白名单在 `tests/e2e/common.sh` 与
-`tests/e2e/env.mjs`，与 CI 触发分支保持一致）。
+e2e scripts may run only on `main` / `develop` and on `chore-*` / `fix-*` / `docs-*` / `perf-*` / `test-*` / `feat-*` branches (the allowlist is in `tests/e2e/common.sh` and `tests/e2e/env.mjs`, kept in sync with the CI trigger branches).
 
-## 分支与发布
+## Branches and releases
 
-- `main`：稳定发布线，README 安装命令默认 `#main`。
-- `develop`：集成交付线，日常开发与用户实时验证；稳定后回合 main。
-- 发布候选（rc.N）按 `docs/RELEASE.md` 执行：版本 bump、全套门禁、
-  full-SHA 远端安装/回滚演练、真实模型 smoke、受保护 tag；npm 保持 NO-GO。
-- 功能分支：`feat-*` / `fix-*` / `docs-*` / `perf-*` / `test-*` / `chore-*`，
-  从 develop 拉出，短生命周期。
-- 提交规范：Conventional Commits（feat/fix/docs/perf/test/chore/refactor）。
-- 遗留 feat-* 分支均已并入 main；清理工具 `scripts/cleanup-merged-branches.sh`
-  （默认 dry-run，`--apply` 本地删除，`--remote` 同步远端）。
+- `main`: stable release line; the README install command defaults to `#main`.
+- `develop`: integration delivery line for daily development and live user verification; merges to main once stable.
+- Release candidates (rc.N) follow `docs/RELEASE.md`: version bump, full gate, full-SHA remote install/rollback drill, real-model smoke, protected tag; npm stays NO-GO.
+- Feature branches: `feat-*` / `fix-*` / `docs-*` / `perf-*` / `test-*` / `chore-*`, branched from develop and short-lived.
+- Commit convention: Conventional Commits (feat/fix/docs/perf/test/chore/refactor).
+- Leftover feat-* branches are all merged into main; the cleanup tool is `scripts/cleanup-merged-branches.sh` (dry-run by default, `--apply` deletes locally, `--remote` syncs the remote).
 
-## 关键实现约定与陷阱
+## Key implementation conventions and pitfalls
 
-- **路由注册顺序即匹配顺序**：`src/bridge/routes.ts` 按 boot → session-v2 →
-  session-v2-extra → fs → stubs → client-compat → SSE 顺序调用；新增路由放在对应域文件。
-- **会话列表标题**：dsh `session.list` 不返回 title 投影；bridge 从
-  `session.history` tail 投影补读（≤40 非空会话同步全量，大列表后台低并发补
-  24，绝不阻塞列表请求）。标题优先级：投影标题 → 目录 basename → session id。
-- **在途合并与缓存**：`session.list` / `session.history` 的在途 RPC 共享
-  （`InteractionState` 内 loading promise），失效用 generation 计数防竞态。
-- **回退（revert）边界是排他的**：`POST /api/session/:id/revert/stage` 指定的
-  消息及其之后的消息在 commit 时一并丢弃；`POST /api/session/:id/fork` 的
-  `before` 同样排他。dsh 的 `sessionController.fork` 复制的是**包含** `atSeq` 的
-  接前缀，所以切点要用 `R.atSeqBeforeMessage`（边界消息的前一个事件）算；切点在
-  第一条消息之前时 dsh 表达不了空 fork，返回 400 `cannot cut before the first
-  message`。三个路由（stage / `DELETE .../revert` / commit）与 `session.revert.*`
-  三个事件在 `src/bridge/routes/session-v2.ts`；文件回滚在 `src/rewind/`（按 turn
-  分组的 copy-on-write 快照，stage 即时回滚、commit 保留、clear 撤销；边界是
-  用户 prompt 时本回合的文件也算入）。
-- **回退后 opencode 会话 id 跟随 fork**：commit 以切点 fork dsh 会话，并用
-  `InteractionState.setSessionAlias` 把 opencode id 指向 fork。因此 `rpc()` 里的
-  `resolveSessionPayload` 会把所有 dsh 调用改写到 fork；会话列表用原 id 发布
-  fork 并丢掉被替换的会话；`GET /api/session/:id` 与 `/message` 读 fork；fork 的
-  SSE 事件由 `mapEventSessionId` 改写回原 id；模型/preset/标题/消息 id 映射由
-  `inheritSessionState` 继承。和 OpenCode 一样，下一条 prompt 到达时
-  `POST /api/session/:id/prompt` 先提交已暂存的回退。已知限制：文件 diff 是首尾
-  改动行之间的一个粗 hunk（与 bridge 自身的文件改动 diff 同形），不是完整 LCS
-  diff。
-- **SSE turn 事件**：`turn/start` 广播 `session.status busy` + `turn.wait`；
-  `turn/end` 广播 `session.status idle` + `session.idle` + `turn.idle`。
-  TUI 的 Esc 打断依赖 `phase === "running"`，没有 `turn.wait` 就不会打断。
-- **SSE 心跳不能去掉**：`src/bridge/sse.ts` 每 15 秒给每个连接写一帧
-  `: heartbeat\n\n`（官方 server 的 `packages/server/src/handlers/event.ts` 同样式）。
-  没有心跳时安静会话的流会被客户端判定为断流：官方客户端报 "Event stream
-  stalled" 并重连，OpenChamber 的上游读取器 20 秒就放弃，两者都变成重连循环。
-  注释帧对 SSE 解析器透明，但算"收到了数据"。
-- **status 快照必须保持有界**：`replaySessionStatusSnapshot()` 的上限是
-  `SESSION_STATUS_SNAPSHOT_LIMIT = 20`（先报运行中的会话，剩下名额按
-  `sessionStatusUpdatedAt` 给最近动过的）。旧实现把 bridge 见过的一切会话都
-  报一遍，官方 Web UI 每次连接要读几百条会话记录，初始加载永远结束不了。
-  放宽这个上限要连带评估连接成本。
-- **CORS 与官方 server 对齐**：`src/bridge/http.ts` 的 `isAllowedCorsOrigin()` /
-  `corsHeaders()` 必须保持官方 `packages/server/src/cors.ts` 的形状：允许
-  `http://localhost:<port>`、`http://127.0.0.1:<port>`、`oc://renderer`、tauri
-  的源、`*.opencode.ai`，加上 `DSH_OC_CORS`（逗号分隔，等价官方 `cors` 选项）；
-  允许时**回显请求自己的 origin** 并带 `Access-Control-Allow-Credentials: true`。
-  旧的 `Access-Control-Allow-Origin: *` 已删除：带凭据的请求会被浏览器拒绝
-  （"credentialed request requires Access-Control-Allow-Origin '<origin>'"），
-  浏览器 UI 因此完全连不上。不要再退回 `*`。
-- **Web UI 回落规则**：`src/bridge/http.ts` 里匹配不到任何路由的 `GET`/`HEAD`
-  交给 `router.serveWebUi`（`src/bridge/web-ui.ts`）：单页应用，未知路径也是
-  `index.html`；`_assets/`、`icons/` 下缺失的文件是 404，其它方法的未匹配路由
-  仍是 501。API 路由优先于 Web UI。
-- **`DSH_OC_HTTP_LOG=1`** 打开每个请求的 stderr 追踪（`[bridge/http] <METHOD>
-  <path>`），是没有浏览器时确认 UI 调用模式的手段。
-- **reasoning 时长**：reasoning part 的 `end` 取该块最后一条 chunk 的时间；
-  text 块开始时、以及 turn/end（中断无最终消息）时都会关闭仍打开的
-  reasoning part，避免 thinking 一直转圈。0.1.5 的 live 时间来自
-  `agent/assistant-stream` 帧的 `time`，冷读来自内嵌 stream 的
-  `block-start`/`block-end`（见 `assistantStreamTiming`）。
-- **agent preset 锁定**：dsh 在会话产生首条回复后锁定 agent preset
-  （409 `agent-preset-locked`）。Tab/`/preset` 只能对空白会话生效；对已开始
-  的会话，prompt 体携带 agent 时 bridge 会尝试切换，失败后在第一条消息后
-  广播一次「Agent switch locked」提示（按 session+agent 去重）。
-- **退出 splash**：官方 opencode 二进制在会话有内容时打印自己的 logo 与
-  `opencode -s <id>` 恢复命令，无法替换；dsh-oc 在下方补一行 dsh 恢复说明
-  （`DSH_OC_DISABLE_EXIT_NOTE=1` 可关）。
-- **--mini**：通过 `opencode mini --server <bridge-url>` 启动，prompt 走
-  `POST /api/session/:id/prompt`；流式回合打断按两次
-  Esc（与官方 opencode 2.1.0 handler 一致），全量 TUI 也按两次。
-- **mini e2e 退出码**：`scripts/e2e-tui-mini.sh` 的三次 C-c 可能由 SIGINT
-  结束并返回 130；脚本接受 0/130，但仍必须断言 dsh-oc 退出提示。
-- **协议探针**：`scripts/probe-opencode.mjs` 自动扫描 `router.ts` +
-  `routes.ts` + `src/bridge/routes/` + `stubs.ts`；新增路由文件需被扫描到。
-- **e2e mock LLM**：`tests/e2e/mock-llm.mjs` 包装
-  `@deepseek-ai/dsh-llm-mock-server`；长时间流用 `partial_disconnect` +
-  `repeatLast`，慢速块用 `chunkDelayMs/chunkSize`（注意 `success` 行为固定
-  0 延迟）。env.mjs 启动的 mock 随父进程退出，手动测试要在同一进程内自建。
-- **性能回归警惕**：任何在列表/history 请求路径上加同步工作的改动都要跑
-  `pnpm run perf -- --sessions 5000` 对比；此前标题补温曾把冷读拖到 10s+。
+- **Route registration order is match order**: `src/bridge/routes.ts` calls boot → session-v2 → session-v2-extra → fs → stubs → client-compat → SSE in that order; add new routes to the matching domain file.
+- **Session list titles**: dsh `session.list` does not return a title projection; the bridge backfills it by projecting the `session.history` tail (synchronous full read for ≤40 non-empty sessions, background backfill of 24 at low concurrency for large lists, never blocking the list request). Title priority: projected title → directory basename → session id.
+- **In-flight merging and caching**: in-flight RPCs for `session.list` / `session.history` are shared (a loading promise inside `InteractionState`), and invalidation uses a generation counter to prevent races.
+- **Revert boundaries are exclusive**: the message named in `POST /api/session/:id/revert/stage` and every message after it are discarded together at commit; `before` on `POST /api/session/:id/fork` is exclusive in the same way. dsh's `sessionController.fork` copies the prefix that **includes** `atSeq`, so the cut point must be computed with `R.atSeqBeforeMessage` (the event before the boundary message); when the cut point is before the first message, dsh cannot express an empty fork and returns 400 `cannot cut before the first message`. The three routes (stage / `DELETE .../revert` / commit) and the three `session.revert.*` events are in `src/bridge/routes/session-v2.ts`; file rollback is in `src/rewind/` (copy-on-write snapshots grouped by turn: stage rolls back immediately, commit keeps, clear undoes; when the boundary is a user prompt, that turn's files count as well).
+- **After a revert the opencode session id follows the fork**: commit forks the dsh session at the cut point and uses `InteractionState.setSessionAlias` to point the opencode id at the fork. Therefore `resolveSessionPayload` in `rpc()` rewrites every dsh call to the fork; the session list publishes the fork under the original id and drops the replaced session; `GET /api/session/:id` and `/message` read the fork; SSE events for the fork are rewritten back to the original id by `mapEventSessionId`; the model/preset/title/message id mappings are inherited through `inheritSessionState`. As in OpenCode, when the next prompt arrives, `POST /api/session/:id/prompt` first commits the staged revert. Known limitation: the file diff is one coarse hunk between the first and last changed lines (the same shape as the bridge's own file-change diff), not a full LCS diff.
+- **SSE turn events**: `turn/start` broadcasts `session.status busy` + `turn.wait`; `turn/end` broadcasts `session.status idle` + `session.idle` + `turn.idle`. Esc interrupt in the TUI depends on `phase === "running"`; without `turn.wait` it does not interrupt.
+- **The SSE heartbeat cannot be removed**: `src/bridge/sse.ts` writes one `: heartbeat\n\n` frame to every connection every 15 seconds (the same style as the official server's `packages/server/src/handlers/event.ts`). Without the heartbeat, clients judge a quiet session's stream as stalled: the official client reports "Event stream stalled" and reconnects, OpenChamber's upstream reader gives up after 20 seconds, and both turn into reconnect loops. Comment frames are transparent to SSE parsers but count as "data received".
+- **Status snapshots must stay bounded**: `replaySessionStatusSnapshot()` is capped by `SESSION_STATUS_SNAPSHOT_LIMIT = 20` (running sessions are reported first, the remaining slots go to the most recently touched by `sessionStatusUpdatedAt`). The old implementation reported every session the bridge had ever seen, so the official Web UI read hundreds of session records on each connection and initial load never finished. Raising this limit requires evaluating the connection cost as well.
+- **CORS aligned with the official server**: `isAllowedCorsOrigin()` / `corsHeaders()` in `src/bridge/http.ts` must keep the shape of the official `packages/server/src/cors.ts`: allow `http://localhost:<port>`, `http://127.0.0.1:<port>`, `oc://renderer`, tauri origins, `*.opencode.ai`, plus `DSH_OC_CORS` (comma-separated, equivalent to the official `cors` option); when a request is allowed, **echo its own origin** and include `Access-Control-Allow-Credentials: true`. The old `Access-Control-Allow-Origin: *` was removed: browsers reject credentialed requests ("credentialed request requires Access-Control-Allow-Origin '<origin>'"), so the browser UI could not connect at all. Do not go back to `*`.
+- **Web UI fallback rule**: in `src/bridge/http.ts`, a `GET`/`HEAD` that matches no route goes to `router.serveWebUi` (`src/bridge/web-ui.ts`): single-page app, so unknown paths also get `index.html`; missing files under `_assets/`, `icons/` are 404, and unmatched routes for other methods are still 501. API routes take priority over the Web UI.
+- **`DSH_OC_HTTP_LOG=1`** turns on per-request stderr tracing (`[bridge/http] <METHOD> <path>`); it is the way to confirm UI call patterns when no browser is available.
+- **reasoning duration**: the `end` of a reasoning part takes the time of that block's last chunk; when a text block starts, and at turn/end (interrupt with no final message), any reasoning part still open is closed so thinking does not spin forever. In 0.1.5 live timing comes from the `time` of `agent/assistant-stream` frames, and cold reads come from `block-start`/`block-end` of the embedded stream (see `assistantStreamTiming`).
+- **agent preset locking**: dsh locks the agent preset after the session produces its first reply (409 `agent-preset-locked`). Tab/`/preset` only affect empty sessions; for a started session, when the prompt body carries an agent the bridge tries to switch, and on failure broadcasts an "Agent switch locked" notice once after the first message (deduplicated by session+agent).
+- **Exit splash**: when the session has content, the official opencode binary prints its own logo and the `opencode -s <id>` resume command, which cannot be replaced; dsh-oc appends one line of dsh resume instructions below it (`DSH_OC_DISABLE_EXIT_NOTE=1` turns this off).
+- **--mini**: start it with `opencode mini --server <bridge-url>`; prompts go through `POST /api/session/:id/prompt`; interrupting a streaming turn takes two Esc presses (the same as the official opencode 2.1.0 handler), and the full TUI also takes two.
+- **mini e2e exit code**: the three C-c presses in `scripts/e2e-tui-mini.sh` may end through SIGINT and return 130; the script accepts 0/130 but must still assert the dsh-oc exit note.
+- **Protocol probe**: `scripts/probe-opencode.mjs` automatically scans `router.ts` + `routes.ts` + `src/bridge/routes/` + `stubs.ts`; new route files must be picked up by the scan.
+- **e2e mock LLM**: `tests/e2e/mock-llm.mjs` wraps `@deepseek-ai/dsh-llm-mock-server`; use `partial_disconnect` + `repeatLast` for long streams and `chunkDelayMs/chunkSize` for slow chunks (note that the `success` behavior has a fixed 0 delay). The mock started by env.mjs exits with the parent process, so manual tests must build their own inside the same process.
+- **Watch for performance regressions**: any change that adds synchronous work to the list/history request path must be compared with `pnpm run perf -- --sessions 5000`; title backfilling once dragged cold reads to 10s+.
 
-## 文档入口
+## Documentation entry points
 
-- [docs/FEATURES.md](docs/FEATURES.md)：能力矩阵（自动追踪）。
-- [docs/PROTOCOL.md](docs/PROTOCOL.md)：协议路由与 SSE 映射。
-- [docs/ROADMAP.md](docs/ROADMAP.md)：下一阶段需求。
-- [docs/CHANGELOG.md](docs/CHANGELOG.md)：版本变更。
-- [docs/perf/results-2026-08-15.md](docs/perf/results-2026-08-15.md)：性能数据。
+- [docs/FEATURES.md](docs/FEATURES.md): capability matrix (auto-tracked).
+- [docs/PROTOCOL.md](docs/PROTOCOL.md): protocol routes and SSE mapping.
+- [docs/ROADMAP.md](docs/ROADMAP.md): next-stage requirements.
+- [docs/CHANGELOG.md](docs/CHANGELOG.md): version changes.
+- [docs/perf/results-2026-08-15.md](docs/perf/results-2026-08-15.md): performance data.
 
-## 演示录制与发布（README 演示）
+## Demo recording and publishing (README demo)
 
-面向还没用过 dsh-oc 的用户：用真实模型 + 有意义的任务，不要用 mock 或无意义
-任务。GitHub README 不执行 `<script>`，无法直接嵌入 asciinema 播放器；按
-asciinema 官方建议用 `agg` 生成 GIF 以 `<img>` 嵌入，cast 源文件保留在仓库。
+Aimed at users who have not used dsh-oc yet: use a real model with a meaningful task, not a mock or a meaningless task. The GitHub README does not execute `<script>`, so an asciinema player cannot be embedded directly; follow asciinema's official advice and generate a GIF with `agg` for `<img>` embedding, keeping the cast source in the repository.
 
-依赖：`asciinema`（`pip install asciinema`）与 `agg`
-（`gh release download -R asciinema/agg -p 'agg-<platform>'` 或
-`cargo install agg`）。
+Dependencies: `asciinema` (`pip install asciinema`) and `agg` (`gh release download -R asciinema/agg -p 'agg-<platform>'` or `cargo install agg`).
 
-1. 在已安装的 dsh 上准备：先手动启动一次 `dsh --profile oc` 预热 opencode
-   二进制与缓存，避免正式录制里出现首次下载/解析的长等待。
-2. 在 tmux / PTY 中录制，`-i 2` 会把播放时的空闲段压缩到最多 2 秒：
-   `asciinema rec --cols 110 --rows 30 -i 2 -t 'dsh-oc demo' -q docs/demo/dsh-oc-demo.cast`
-   然后启动 `dsh --profile oc`，用真实模型完成一个有意义的短任务（例如
-   「运行 `pnpm test` 并汇报结果」），最后 Ctrl+C 退出并结束录制。保留真实
-   启动段（shell 提示符 → 输入命令 → logo），不要裁剪开头；空闲由 `-i` /
-   `--idle-time-limit` 压缩。
-3. 生成 GIF（README 用）：
-   `agg --font-family 'Hack,Noto Sans Mono CJK SC' --idle-time-limit 1 --speed 1.2 --fps-cap 15 --font-size 14 docs/demo/dsh-oc-demo.cast docs/demo/dsh-oc-demo.gif`
-   - `Hack` 是等宽字体，`Noto Sans Mono CJK SC` 兜底中文；不要用 SVG 方案，
-     尺寸/字体/报错渲染都容易出问题。
-   - 可选上传：`asciinema upload docs/demo/dsh-oc-demo.cast`，匿名上传 7 天
-     过期，需在 asciinema.org 认领；README 的主嵌入仍是 GIF。
+1. Install the fork (`dsh plugin --profile oc add 'github:shibadogcap/dsh-oc#feat-opencode-2-1'`), then launch `dsh --profile oc` manually once to warm the opencode binary and caches, so the real recording has no long first download/resolve wait.
+2. Record in tmux / a PTY; `-i 2` compresses idle stretches to at most 2 seconds on playback: `asciinema rec --cols 110 --rows 30 -i 2 -t 'dsh-oc demo' -q docs/demo/dsh-oc-demo.cast`, then start `dsh --profile oc` and complete a meaningful short task with a real model (for example "run `pnpm test` and report the result"), then press Ctrl+C to exit and end the recording. Keep the real startup segment (shell prompt → typed command → logo) and do not trim the beginning; idle time is compressed by `-i` / `--idle-time-limit`.
+3. Generate the GIF (for the README): `agg --font-family 'Hack,Noto Sans Mono CJK SC' --idle-time-limit 1 --speed 1.2 --fps-cap 15 --font-size 14 docs/demo/dsh-oc-demo.cast docs/demo/dsh-oc-demo.gif`
+   - `Hack` is the monospace font and `Noto Sans Mono CJK SC` is the Chinese fallback; do not use the SVG approach, because size/font/error rendering all break easily.
+   - Optional upload: `asciinema upload docs/demo/dsh-oc-demo.cast`; anonymous uploads expire after 7 days and must be claimed on asciinema.org; the main README embed is still the GIF.

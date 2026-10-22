@@ -1,16 +1,18 @@
-# 完了条件
+*English · [日本語](ACCEPTANCE.ja.md)*
 
-## 全体
+# Definition of done
 
-1. T0 が Linux、macOS、Windows で通る。
-2. T2 が OpenChamber と TUI の実際の呼び出しをすべて覆い、未実装の 404 がない。
-3. T3 がブリッジの発行する全 session.* を覆い、OpenChamber の reducer が unknown を出さない。
-4. T4 の起動記録で bootstrapGlobal と bootstrapDirectory の失敗が 0 件。
-5. チャットのシナリオが最後まで通る。
-6. 履歴の再読み込み後、メッセージ、part、ツール状態がリアルタイムの流れと一致する。
-7. SSE の強制切断と再接続で、メッセージと part の重複も欠落もない。
-8. dsh の再起動後、セッション一覧、履歴、モデル、agent、タイトル、巻き戻しのエイリアスが残る。
-9. v1 のルートをすべて削除し、rg で /session と /global/event の登録が見つからない。
-10. docs/PROTOCOL.md の全ルートに MAP、STUB、UNSUPPORTED のいずれかが付いている。
-11. compat.json が固定版本の組と一致する。
-12. /api/info が 100ms 以内、1000 セッションの一覧が 300ms 以内、イベント配信の p95 が 50ms 以内、10 セッション時のメモリが 250MB 未満。
+## Overall
+
+1. T0 passes on Linux, macOS, and Windows.
+2. T2 covers every real call made by OpenChamber and the TUI, with no unimplemented 404.
+3. T3 covers every `session.*` published by the bridge, and the OpenChamber reducer emits no unknown.
+4. In the T4 startup record, `bootstrapGlobal` and `bootstrapDirectory` have zero failures.
+5. The chat scenario runs through to the end.
+6. After the history is reloaded, messages, parts, and tool states match the real-time stream.
+7. A forced SSE disconnect and reconnect produce neither duplicated nor missing messages and parts.
+8. After a dsh restart, the session list, history, models, agent, titles, and revert aliases remain.
+9. All v1 routes are deleted, and `rg` finds no registration of `/session` or `/global/event`.
+10. Every route in `docs/PROTOCOL.md` carries MAP, STUB, or UNSUPPORTED.
+11. `compat.json` matches the pinned version set.
+12. `/api/info` responds within 100ms, listing 1000 sessions takes under 300ms, event delivery has a p95 under 50ms, and memory with 10 sessions stays under 250MB.

@@ -175,7 +175,7 @@ export const OcTuiConfig = z.object({
 
 export type OcTuiConfig = z.infer<typeof OcTuiConfig>
 
-export { helpRequested, ocHelp } from '../help.js'
+export { helpLanguageFromEnv, helpRequested, ocHelp } from '../help.js'
 
 /** Minimal child-process surface used by the spawn helper (test friendly). */
 export interface TuiChild {

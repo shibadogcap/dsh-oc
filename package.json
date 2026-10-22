@@ -45,6 +45,7 @@
     "perf": "node scripts/perf.mjs",
     "perf:gen": "node scripts/perf-session-gen.mjs",
     "features:update": "node scripts/update-feature-matrix.mjs",
+    "docs:check": "node scripts/check-docs-i18n.mjs",
     "pack:dry": "pnpm pack --dry-run",
     "e2e": "bash scripts/check-all.sh --e2e",
     "e2e:api": "CI_E2E_SUBSET=api bash scripts/check-all.sh --e2e"
@@ -89,5 +90,13 @@
     "tsdown": "0.22.14",
     "typescript": "7.0.2",
     "vitest": "4.1.10"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/shibadogcap/dsh-oc.git"
+  },
+  "homepage": "https://github.com/shibadogcap/dsh-oc#readme",
+  "bugs": {
+    "url": "https://github.com/shibadogcap/dsh-oc/issues"
   }
 }

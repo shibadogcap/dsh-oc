@@ -1,114 +1,132 @@
-# dsh-oc 发布与回滚流程
+*English · [日本語](RELEASE.ja.md) · [中文](RELEASE.zh.md)*
 
-`v0.2.0-rc.1` 已于 2026-09-07 发布；`v0.2.0-rc.2` 已于 2026-09-08 发布。
-rc.1–rc.3 面向 dsh `>=0.1.2-rc.1`；rc.4 起面向 dsh `>=0.1.5-rc.2`（host ABI
-破坏性变更，跨 0.1.2/0.1.5 的安装不可混用）。后续候选复用本清单，把文中的
-`<candidate-version>` 替换为实际版本。
+# dsh-oc release and rollback process
 
-本次候选版本为 `v0.2.0-rc.4`；rc.1–rc.3 发布记录保留为历史证据。
+`v0.2.0-rc.1` was released on 2026-09-07 and `v0.2.0-rc.2` on 2026-09-08. rc.1–rc.3 target dsh
+`>=0.1.2-rc.1`; rc.4 and later target dsh `>=0.1.5-rc.2` (a breaking change to the host ABI, so
+installs across 0.1.2 and 0.1.5 cannot be mixed). Later candidates reuse this checklist and
+replace `<candidate-version>` with the actual version.
 
-发布决策依据见 `expert-advice/round-0002/decision.md`；npm 继续 NO-GO。包
-`@chiro2001/dsh-oc` 只走 GitHub 源安装，发布物以**完整 commit SHA** 为真相源，
-`lib/` 构建产物必须随提交且与源码零差异。
+The current candidate is `v0.2.0-rc.4`; the rc.1–rc.3 release records are kept as historical
+evidence.
 
-## 前置条件（每次候选都需满足）
+The release decision is recorded in `expert-advice/round-0002/decision.md`; npm stays NO-GO. The
+`@chiro2001/dsh-oc` package is installed only from the GitHub source, the **full commit SHA** is
+the source of truth for a release, and the `lib/` build artifacts must be committed and show zero
+diff against the source.
 
-1. `pnpm typecheck && pnpm test` 全绿；`pnpm run probe` 的全部 fixture 路由、协议和
-   版本检查通过（当前基线输出 63/63；新增路由后以 fixture 全通过为准）。
-2. `bash scripts/verify-release-artifacts.sh` PASSED（HEAD 干净重建后
-   committed `lib/` 零差异；npm pack 无机器绝对路径；记录 tarball/tree hash）。
-3. `bash scripts/check-all.sh --e2e` 全绿（含恢复故障域、golden trace、
-   queued-order-repro、permission-mini 等 stable 套件）。
-4. 稳定基线：`scripts/flake-mini-scan.sh` 在 release-lane 预算内跑过
-   最小高风险脚本（参考 docs/perf/results-flake-consolidated-2026-08-17.md）。
+## Prerequisites (required for every candidate)
 
-## 候选步骤
+1. `pnpm typecheck && pnpm test` all green; every fixture route, protocol, and version check in
+   `pnpm run probe` passes (the current baseline prints 63/63; after adding routes, a full fixture
+   pass is the criterion).
+2. `bash scripts/verify-release-artifacts.sh` PASSED (after a clean rebuild of HEAD the committed
+   `lib/` has zero diff; npm pack contains no machine absolute paths; the tarball and tree hashes
+   are recorded).
+3. `bash scripts/check-all.sh --e2e` all green (including the recovery failure domains, the golden
+   trace, queued-order-repro, permission-mini, and the other stable suites).
+4. Stable baseline: `scripts/flake-mini-scan.sh` has run the smallest high-risk scripts within the
+   release-lane budget (see docs/perf/results-flake-consolidated-2026-08-17.md).
 
-1. **版本 bump**：`package.json` 与 `src/index.ts` 的 `DSH_OC_VERSION`
-   同步改为 `<candidate-version>`；`pnpm build` 重建 `lib/` 并提交。
-2. **本地门禁**：typecheck + 单测 + probe + 工件审计 + 全量 e2e；协议或 TUI
-   改动必须包含对应的 tmux/官方 TUI 回归。
-3. **推送 develop** 并等 CI 全绿（ci + 双分片 e2e）。
-4. **远端 full-SHA 演练**：
+## Candidate steps
+
+1. **Version bump**: change `package.json` and `DSH_OC_VERSION` in `src/index.ts` to
+   `<candidate-version>` together; run `pnpm build` to rebuild `lib/` and commit it.
+2. **Local gates**: typecheck + unit tests + probe + artifact audit + full e2e; protocol or TUI
+   changes must include the matching tmux / official TUI regression.
+3. **Push develop** and wait for CI to go green (ci + both e2e shards).
+4. **Remote full-SHA rehearsal**:
    ```bash
    bash scripts/e2e-install-rollback.sh \
-     --candidate "github:chiro2001/dsh-oc#<full-sha>" \
-     --previous "github:chiro2001/dsh-oc#<同 dsh-0.1.5-ABI 的上一不可变 sha>"
+     --candidate "github:shibadogcap/dsh-oc#<full-sha>" \
+     --previous "github:shibadogcap/dsh-oc#<previous immutable sha on the same dsh-0.1.5 ABI>"
    ```
-   rc.4 是首个 0.1.5-ABI 版本，没有同 ABI 的前一不可变 SHA：回滚演练用 rc.4
-   自身的 full SHA 验证冷装/重装幂等，并另外验证跨 ABI 回滚到 rc.3 时必须同时
-   把 dsh CLI 降到 `0.1.2-rc.1`（否则按预期无法启动，不算失败）。
-   验证：冷装成功、包版本为 `<candidate-version>`、TUI smoke 通过、旧会话可恢复、
-   回滚可操作；脚本同时断言 `pnpm-lock.yaml` 实际解析到指定 full SHA，不能只
-   用相同版本号冒充回滚成功。
-   同版本可变 ref 的 in-place 结果不作为缓存安全证明（版本号变化 +
-   full SHA 才是）。
-5. **真实模型 smoke（远端候选）**：
+   rc.4 is the first 0.1.5-ABI version and has no earlier immutable SHA on the same ABI: the
+   rollback rehearsal uses rc.4's own full SHA to verify that cold install and reinstall are
+   idempotent, and separately verifies that rolling back across the ABI to rc.3 requires
+   downgrading the dsh CLI to `0.1.2-rc.1` at the same time (otherwise it fails to start as
+   expected, which does not count as a failure).
+   Verify: the cold install succeeds, the package version is `<candidate-version>`, the TUI smoke
+   passes, old sessions can be recovered, and the rollback works; the script also asserts that
+   `pnpm-lock.yaml` actually resolves to the given full SHA, so a matching version number cannot
+   stand in for a successful rollback.
+   An in-place result for a mutable ref of the same version is not proof of cache safety (a
+   version change plus a full SHA is).
+5. **Real model smoke (remote candidate)**:
    ```bash
-   bash scripts/e2e-real-llm.sh --quick --add-spec "github:chiro2001/dsh-oc#<full-sha>"
+   bash scripts/e2e-real-llm.sh --quick --add-spec "github:shibadogcap/dsh-oc#<full-sha>"
    ```
-6. **合并 main** 并推送；记录发布四元组：
-   `{opencode 1.18.18, asset sha256, package tree hash, dsh-oc commit}`。
-7. **受保护 tag**：`v<candidate-version>` 指向已演练的 full SHA；Release notes
-   写明 full SHA、tarball/tree hash、已知限制（工具+排队即时视图错序、
-   `Allow always` 重启清空、退出 splash 等）。
-8. **更新本地安装**：`dsh plugin --profile oc add github:chiro2001/dsh-oc#v<candidate-version>`，
-   再用 `dsh-oc --version` 核对 dsh-oc 与 dsh 的版本。
+6. **Merge main** and push; record the four release identifiers:
+   `{opencode 1.18.18, asset sha256, package tree hash, dsh-oc commit}`.
+7. **Protected tag**: `v<candidate-version>` points at the rehearsed full SHA; the release notes
+   state the full SHA, the tarball/tree hashes, and the known limitations (out-of-order immediate
+   view for tool + queued messages, `Allow always` cleared on restart, the exit splash, and so on).
+8. **Update the local install**: `dsh plugin --profile oc add github:shibadogcap/dsh-oc#v<candidate-version>`,
+   then check the dsh-oc and dsh versions with `dsh-oc --version`.
 
-## v0.2.0-rc.1 发布记录（2026-09-07）
+## v0.2.0-rc.1 release record (2026-09-07)
 
-该候选已完成发布门禁和远端演练：
+This candidate completed the release gates and the remote rehearsal:
 
-- dsh ABI：host services 直连、legacy dcp rc.6 compat shim、history follow/page
-  iterator close、errors/approval/question 已有 targeted tests。
-- bridge：status 内存热路径、api-session/status/activity、bounded SSE ring、
-  reconnect status replay、queue/history/model/preset/subagent 回归已覆盖。
-- 构建与审计：`pnpm typecheck`、418 个单元测试、`pnpm build`、协议 probe fixture
-  全部通过、5000 会话性能测试和 release artifact audit 已通过（rc.1 发布基线
-  为 62/62；rc.2 发布基线为 63/63）。
-- TUI 与远端：完整真实 TUI e2e、高风险 flake scan 30/30、GitHub CI、full-SHA
-  冷装、真实 TUI smoke、同 ABI 回滚和真实 DeepSeek quick smoke 已通过。
-- 发布四元组：opencode `1.18.18`、dsh-oc commit、tarball SHA256、package
-  tree hash，详见 GitHub prerelease notes。
+- dsh ABI: host services connected directly, the legacy dcp rc.6 compat shim, history follow/page
+  iterator close, and existing targeted tests for errors/approval/question.
+- bridge: the in-memory status hot path, api-session/status/activity, the bounded SSE ring,
+  reconnect status replay, and queue/history/model/preset/subagent regressions are covered.
+- Build and audit: `pnpm typecheck`, 418 unit tests, `pnpm build`, all protocol probe fixtures, the
+  5000-session performance test, and the release artifact audit passed (the rc.1 release baseline
+  was 62/62; the rc.2 release baseline was 63/63).
+- TUI and remote: the full real TUI e2e, the high-risk flake scan 30/30, GitHub CI, the full-SHA
+  cold install, the real TUI smoke, the same-ABI rollback, and the real DeepSeek quick smoke
+  passed.
+- Four release identifiers: opencode `1.18.18`, the dsh-oc commit, the tarball SHA256, and the package
+  tree hash; see the GitHub prerelease notes.
 
-## v0.2.0-rc.3 候选记录（2026-09-08）
+## v0.2.0-rc.3 candidate record (2026-09-08)
 
-- 修复官方 OpenCode prompt 顶层 `variant` 的 reasoning effort 同步：显式 max/off
-  持续作用于后续轮次，Default 回到 dsh 后端默认，并同步 session、history、live
-  与 queued user model ref。
-- 用户手动 TUI max/off 多轮验证通过；本地 host oracle 校验 provider request body
-  的 enabled/max 与 disabled/无 reasoning_effort 语义。
-- 本地 typecheck、435 个单元测试、63/63 probe、perf smoke、artifact audit 和
-  39 个 e2e（含真实 TUI、recovery、golden trace）首跑全绿、无 retry。
-- 远端 CI 反馈的 permission TUI 主题相关选择同步与无 `rg` 时 artifact scanner
-  行为已修复，并分别有确定性回归覆盖。
-- full SHA、tarball SHA256、package tree hash 与最终发布状态以 GitHub notes 为准。
+- Fixed reasoning effort sync for the top-level `variant` of official OpenCode prompts: an explicit
+  max/off keeps applying to later turns, Default returns to the dsh backend default, and the
+  session, history, live, and queued user model refs stay in sync.
+- The user's multi-turn manual TUI verification of max/off passed; the local host oracle validates
+  the enabled/max and disabled/no-reasoning_effort semantics of the provider request body.
+- Local typecheck, 435 unit tests, 63/63 probe, perf smoke, artifact audit, and 39 e2e runs
+  (including the real TUI, recovery, and golden trace) were all green on the first run with no
+  retries.
+- The permission TUI theme-dependent choice sync and the artifact scanner behaviour when `rg` is
+  missing, both reported by remote CI feedback, are fixed and each has deterministic regression
+  coverage.
+- The full SHA, tarball SHA256, package tree hash, and final release status are authoritative in
+  the GitHub notes.
 
-## v0.2.0-rc.2 发布记录（2026-09-08）
+## v0.2.0-rc.2 release record (2026-09-08)
 
-- 新增官方 OpenCode `!` shell mode；用户命令和输出通过非唤醒 context 注入下一次
-  模型 prompt，并保留精确 PID/进程组取消和输出预算。
-- 修复 `/preset` 最终 assistant 卡片的模型/variant 回显与 `QUEUED` 完成状态，
-  增加 v1/v2 history 与真实 TUI 回归。
-- 完善 profile 隔离与 dsh-tui/dsh-dcp ABI 排障文档；修复构建工件跨路径 hash 漂移，
-  并收紧 TUI e2e 的状态驱动等待。
-- 协议 probe 发布基线为 63/63；完整 commit SHA、tarball SHA256、package tree hash
-  与 opencode asset SHA256 以
-  [GitHub prerelease notes](https://github.com/chiro2001/dsh-oc/releases/tag/v0.2.0-rc.2)
-  为准，本文不复制可漂移的发布标识。
+- Added the official OpenCode `!` shell mode; the user command and its output are injected into
+  the next model prompt through a non-waking context, and exact PID/process-group cancellation and
+  the output budget are preserved.
+- Fixed the model/variant echo on the final assistant card for `/preset` and the `QUEUED`
+  completion state, with added v1/v2 history and real TUI regressions.
+- Improved profile isolation and the dsh-tui/dsh-dcp ABI troubleshooting docs; fixed build
+  artifact hash drift across paths and tightened the state-driven waits in the TUI e2e.
+- The protocol probe release baseline is 63/63; the full commit SHA, tarball SHA256, package tree
+  hash, and opencode asset SHA256 are authoritative in the
+  [GitHub prerelease notes](https://github.com/shibadogcap/dsh-oc/releases);
+  this document does not copy release identifiers that can drift.
 
-## 回滚
+## Rollback
 
-任何一步出现 blocker（stale/missing `lib`、版本与 `<candidate-version>` 不符、远端 SHA 安装
-失败、旧会话不兼容、恢复不一致、CI 语义失败靠 retry 洗绿），停止发布；
-修复后从**全新 profile** 重跑对应演练，不在污染环境续测。当前 RC 是 dsh ABI
-breaking minor：同 dsh `0.1.5-rc.2` 内回滚可重新安装同 ABI 的前一不可变 SHA
-（rc.4 的上一不可变 SHA 为 rc.3，但它面向 dsh 0.1.2，不能与本版共用 dsh CLI）；
-若回滚到 `dsh-oc v0.1.0`，必须同时将 dsh CLI 回滚到 `0.1.0-rc.6`。跨 ABI 回滚
-必须同时回滚 dsh CLI，否则旧版 host-services/事件契约与新版 dsh 不同而无法启动。
+If any step hits a blocker (stale or missing `lib`, a version that does not match
+`<candidate-version>`, a failed remote SHA install, incompatible old sessions, inconsistent
+recovery, a CI semantic failure washed green by retries), stop the release; after fixing it, rerun
+the matching rehearsal from a **fresh profile** instead of continuing in a polluted environment.
+The current RC is a dsh ABI breaking minor: a rollback inside the same dsh `0.1.5-rc.2` can
+reinstall the previous immutable SHA on the same ABI (the previous immutable SHA before rc.4 is
+rc.3, but it targets dsh 0.1.2 and cannot share the dsh CLI with this version); rolling back to
+`dsh-oc v0.1.0` requires rolling the dsh CLI back to `0.1.0-rc.6` at the same time. A cross-ABI
+rollback must roll back the dsh CLI as well, otherwise the old host-services/event contract
+differs from the new dsh and the install cannot start.
 
-## opencode 二进制升级（独立 lane，不混入当前候选）
+## opencode binary upgrade (separate lane, not mixed into the current candidate)
 
-opencode 版本升级不混入 `<candidate-version>`：先用
-`bash scripts/upgrade-lane.sh --bin <candidate>` 对黄金轨迹做语义差分，
-全绿后才考虑更新 `opencode-version.json`/asset 清单并走独立候选流程。
+opencode version upgrades are not mixed into `<candidate-version>`: first run
+`bash scripts/upgrade-lane.sh --bin <candidate>` for a semantic diff against the golden trace, and
+only when it is fully green consider updating `opencode-version.json`/the asset manifest and going
+through a separate candidate flow.

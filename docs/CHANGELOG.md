@@ -1,572 +1,654 @@
+*English · [日本語](CHANGELOG.ja.md) · [中文](CHANGELOG.zh.md)*
+
 # Changelog
 
-格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)；
-版本号遵循 semver。当前 npm 包名 `@chiro2001/dsh-oc`，尚未发布 registry，
-安装/更新走 GitHub 源（`#main` / `#develop`）。
+The format follows [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/); version numbers
+follow semver. The current npm package name is `@chiro2001/dsh-oc` and it is not published to a
+registry yet, so install and update from the GitHub source (`#main` / `#develop`).
 
 ## [Unreleased]
 
-- 修复“模型已配置但客户端无法选择”：dsh 只有在 provider 有可用凭证时才列举模型，
-  凭证缺失时 `/api/model` 为空，按目录解析模型选择的客户端（TUI）会停在
-  “No provider selected”并进入 dsh 不使用的 OpenCode provider 连接流程。bridge
-  现在在目录为空时发布 dsh 配置中的默认模型（`/api/model`、`/api/provider`、
-  `/api/model/default`），`/api/config` 返回带 `model` 与 `default_agent` 的
-  配置文档，带模型的 `POST /api/session` 不再因模型不可路由而整体失败，
-  模型切换失败时点名缺少的凭证，目录为空的原因在启动时记录一次。
-  配置方法见 [COMPAT.md](COMPAT.md) 的「モデル（provider）の設定」。
-- TUI 品牌插件改为 2.1.0 的真实插件 API。旧插件按 1.x 写法导出函数，加载时报
-  `Invalid V2 TUI plugin module`；2.1.0 把 slot 树放在 `context.ui.slot`，并且
-  没有首页 logo 的 slot（首页 logo 由 TUI 自己渲染），因此 `DSH ⨯ OC` 与副标题
-  落在 `home.footer`。插件 `package.json` 同时提供 `"."` 与 `"./tui"` 入口。
-- 官方 OpenCode Web UI 改为由 bridge 自己提供，与 API 同一个源。官方 opencode
-  二进制把 Web UI 打成一段 `AppArchive`（小端 u32 的 JSON 索引长度 + 索引 +
-  brotli 压缩的资产本体），bridge 启动时解一次到
-  `$DSH_HOME/opencode/web-ui/<version>/`，之后自己伺服这些文件
-  （`src/bridge/web-ui.ts`）。查找顺序是 `DSH_OC_WEB_UI` 指定的目录优先，
-  其次是解包目录。官方 Web UI 总是用 `location.origin` 访问 API，同源之后
-  既没有 CORS 也没有登录，和官方 `opencode serve` 的设置一致。二进制只被查找、
-  不由 bridge 安装（TUI 插件本来就要装它），所以 Web UI 从下一次启动起出现；
-  找不到二进制时不提供 Web UI，API 不受影响。匹配不到任何路由的 `GET`/`HEAD`
-  回落到 Web UI 的 shell（单页应用），`_assets/` 下缺失的文件是 404。
-  `scripts/extract-opencode-web-ui.mjs` 可离线把资产抽到任意目录。
-- CORS 策略改为与官方 opencode 服务器一致（源码 `packages/server/src/cors.ts`）：
-  始终允许 `http://localhost:<port>`、`http://127.0.0.1:<port>`、
-  `oc://renderer`、tauri 的源和 `*.opencode.ai`，另加 `DSH_OC_CORS`
-  （逗号分隔，等价于官方服务器的 `cors` 选项，用于局域网上的浏览器 UI）。
-  允许时响应回显请求自己的 origin 并带
-  `Access-Control-Allow-Credentials: true`。旧实现一律回
-  `Access-Control-Allow-Origin: *`，带凭据的请求会被浏览器拒绝
-  （"credentialed request requires Access-Control-Allow-Origin '<origin>'"），
-  浏览器 UI 因此完全连不上。
-- SSE 增加心跳：`SseHub` 每 15 秒给每个连接写一帧官方服务器同样的注释帧
-  `: heartbeat\n\n`（官方实现在 `packages/server/src/handlers/event.ts`）。
-  之前安静会话的流看起来像断了：官方客户端以 "Event stream stalled" 断开并
-  重连，OpenChamber 的上游读取器 20 秒就放弃，两者都陷入重连循环。
-- SSE 的 status 快照改为有界（`SESSION_STATUS_SNAPSHOT_LIMIT = 20`）：先报运行中
-  的会话，剩下的名额按最近动过的顺序补。旧实现把 bridge 见过的一切会话都报一遍，
-  官方 Web UI 每次连接都要读几百条会话记录，初始加载永远结束不了。
-- 项目列表报告 bridge 的工作目录：`GET /api/project` 返回裸 `Project[]`，
-  `GET /api/project/:projectID` 与 `PATCH /api/project/:projectID` 返回裸 `Project`（PATCH 当前
-  只回显，不落盘）。官方服务器从它服务的目录推导项目列表，浏览器 UI 因此有
-  工作区可选。
-- `DSH_OC_HTTP_LOG=1` 打开 HTTP 请求追踪，每个请求到达时向 stderr 打一行
-  `[bridge/http] <METHOD> <path>`。这是没有浏览器时检查浏览器 UI 调用模式的
-  调试手段。
-- 会话回退（revert）：按 OpenCode 2.1.0 的语义实现。三个路由
-  `POST /api/session/:id/revert/stage`、`DELETE /api/session/:id/revert`、
-  `POST /api/session/:id/revert/commit`，三个 SSE 事件
-  `session.revert.staged` / `session.revert.cleared` / `session.revert.committed`。
-  边界是**排他**的：被指定的消息及其之后的消息在 commit 时一并丢弃，
-  `POST /api/session/:id/fork` 的 `before` 同样排他（dsh 的 fork 复制的是包含
-  `atSeq` 的事件前缀，所以切点取边界消息的前一个事件）。commit 以该切点 fork
-  dsh 会话，opencode 会话 id 跟随这个 fork（别名）：之后的 dsh 调用改写到 fork，
-  会话列表以原 id 发布 fork 并丢掉被替换的会话，`GET /api/session/:id` 与
-  `/message` 读 fork 的摘要与历史，fork 的 SSE 事件改写回原 id，会话级状态
-  （模型、agent preset、标题、消息 id 映射）继承到 fork。文件按 dsh 回合分组
-  回滚：stage 时就地回滚边界之后的回合改过的文件并回报 diff（clear 放回原状、
-  commit 保留回滚结果），边界是用户 prompt 时连同本回合一起回滚。和 OpenCode
-  一样，下一条 prompt 到达时先提交已暂存的回退，prompt 随后落到改写后的会话里。
-- 会话回退（revert）的已知限制：dsh 表达不了空 fork，切点在第一条消息之前时
-  返回 400 `cannot cut before the first message`；文件 diff 是首尾改动行之间的
-  一个粗 hunk（和 bridge 自己的文件改动 diff 同形），不是完整的 LCS diff。
-- 追加 `scripts/e2e-revert-flow.mjs`（`pnpm run e2e:revert`）与
-  `tests/e2e/revert.spec.ts`：对实 bridge 跑完 stage → clear → stage+commit →
-  下一条 prompt 的一整轮，断言边界排他、消息 id 保持、会话 id 不变，以及
-  同一会话里第二次卷回也能生效。
-- 修复 e2e 驱动器对 dsh 0.2.1-rc.2 的漂移，让官方 TUI 的实机 e2e 能真正跑起来：
-  默认代理只在 `127.0.0.1:14514` 真的有响应时才启用（否则 pnpm 报 tunnel
-  error）；dsh 进程按 `--profile oc` 匹配（dsh 现在是
-  `node .../dsh/lib/bin.js --profile oc`）；TUI 启动不再带 dsh 的
-  `--print-logs`（日志会盖在 TUI 的 alternate screen 上，pane 抓取因此看不到
-  输入框）；mock LLM 服务器从 `0.1.0-rc.6` 升到 `0.2.1-rc.2`（前者要求
-  `dsh-invariants@^0.1`，会被插件管理器拒绝）；配置转储检查改认
-  `agent-preset-registry` + `agent-preset`（dsh 0.2 把 `agent-presets` 拆开了）；
-  退出后的 shell 提示符判定补上 powerline 形状。
-- 修复第 2 次及以后的卷回：rewind 插件的 fork 现在先解析 alias，bridge 也用
-  解析后的 dsh 会话 id 去取文件快照，文件集合不再为空。
-- 升级到官方 OpenCode 2.1.0：锁定版本改为 `2.1.0`，`@opencode/client` 同步到
-  `2.1.0`，协议探针基准重录为 138 条路由。2.1.0 相对 2.0.32 的契约差异只有
-  一处新增（`PATCH /api/permission/saved/:id`，用于收窄一条已记住的授权），
-  bridge 已实现该路由；其余为类型重命名（`SessionMessageProviderState` 改为
-  `SessionMessageNative`）与新增事件类型（`session.archived` /
-  `session.unarchived`，dsh 无归档概念，暂不发）。
-- 迁移到官方 OpenCode 2.0.32：TUI 启动从 `opencode attach <url>` 改为
-  `opencode --server <url>`（`--mini` 走 `opencode mini --server <url>`）；2.x CLI
-  已删除 `attach` 子命令，旧写法会以 "Help requested" 报错。
-- 移除 v1 HTTP 层：`/session`、`/config`、`/provider`、`/global/event`、`/vcs*`、
-  `/permission`、`/question`、`/path`、`/project/*` 全部下线，只保留 `/api/*`；
-  OpenCode 2.x client 会调用的 137 条路由由 bridge 全部应答
-  （`scripts/check-client-routes.mjs` 校验 `missing: 0`）。
-- SSE 契约：事件流必须以 `server.connected` 开流（2.x client 拒绝不以它开头的
-  流），之后才做 `Last-Event-ID` 回放与 status/control snapshot 重放；该帧不进入
-  回放 ring。
-- 事件词汇：bridge 在继续发布 1.18.18 形状事件的同时，追加 2.x 原生词汇
-  （`session.text.*`、`session.tool.*`、`session.step.*`、`session.execution.*`、
-  `session.inbox.*`、`permission.*`、`form.*`、`session.compaction.*`），内置 TUI 与
-  OpenChamber UI 读同一条流。
-- e2e 与文档同步：脚本里的 TUI 启动命令改为 `--server` 形式，v1 路由改用 `/api/*`
-  等价路由，版本断言改为 `2.0.32`；`docs/PROTOCOL.md`、`docs/FEATURES.md` 与
-  README 改为 2.x 描述。
-- 修复发布后本地安装 resolver：只解析 dsh-oc codeload SHA，区分 dsh-dcp 等其他包；
-  无 `rg` 时使用隔离验证过的 grep fallback，扫描失败或 SHA 缺失/歧义时 fail-closed。
+- Fix "model configured but the client cannot select it": dsh lists models only when the provider
+  has usable credentials. Without credentials `/api/model` is empty, so a client that resolves
+  model selection from that catalog (the TUI) stops at "No provider selected" and enters the
+  OpenCode provider connection flow that dsh does not use. The bridge now publishes the default
+  model from the dsh config when the catalog is empty (`/api/model`, `/api/provider`,
+  `/api/model/default`); `/api/config` returns a config document carrying `model` and
+  `default_agent`; `POST /api/session` with a model no longer fails as a whole because the model
+  cannot be routed; a failed model switch names the missing credential; and the reason the catalog
+  is empty is logged once at startup. For configuration, see the model (provider) section in
+  [COMPAT.md](COMPAT.md).
+- The TUI branding plugin moves to the real plugin API of 2.1.0. The old plugin exported functions
+  the 1.x way and failed to load with `Invalid V2 TUI plugin module`; 2.1.0 puts the slot tree at
+  `context.ui.slot` and has no home logo slot (the TUI renders the home logo itself), so
+  `DSH ⨯ OC` and the subtitle land in `home.footer`. The plugin `package.json` exposes both the
+  `"."` and `"./tui"` entries.
+- The official OpenCode Web UI is now served by the bridge itself, from the same origin as the API.
+  The official opencode binary packs the Web UI into an `AppArchive` (little-endian u32 length of
+  the JSON index + index + brotli-compressed assets); the bridge unpacks it once at startup into
+  `$DSH_HOME/opencode/web-ui/<version>/` and serves those files itself
+  (`src/bridge/web-ui.ts`). The lookup order puts the directory named by `DSH_OC_WEB_UI` first,
+  then the unpacked directory. The official Web UI always reaches the API through
+  `location.origin`, so same-origin removes both CORS and login, matching the official
+  `opencode serve` setup. The binary is only looked up and never installed by the bridge (the TUI
+  plugin needs it anyway), so the Web UI appears from the next start; when no binary is found the
+  Web UI is not served and the API is unaffected. A `GET`/`HEAD` that matches no route falls back
+  to the Web UI shell (single-page app), and missing files under `_assets/` are 404.
+  `scripts/extract-opencode-web-ui.mjs` can extract the assets offline into any directory.
+- The CORS policy now matches the official opencode server (source
+  `packages/server/src/cors.ts`): always allow `http://localhost:<port>`,
+  `http://127.0.0.1:<port>`, `oc://renderer`, the tauri origins and `*.opencode.ai`, plus
+  `DSH_OC_CORS` (comma separated, equivalent to the official server's `cors` option, for a browser
+  UI on the LAN). When allowed, the response echoes the request's own origin and carries
+  `Access-Control-Allow-Credentials: true`. The old implementation always returned
+  `Access-Control-Allow-Origin: *`, so browsers rejected credentialed requests
+  ("credentialed request requires Access-Control-Allow-Origin '<origin>'") and the browser UI
+  could not connect at all.
+- SSE gains a heartbeat: `SseHub` writes the same comment frame as the official server,
+  `: heartbeat\n\n`, to every connection every 15 seconds (official implementation in
+  `packages/server/src/handlers/event.ts`). Previously a quiet session's stream looked dead: the
+  official client disconnected with "Event stream stalled" and reconnected, and OpenChamber's
+  upstream reader gave up after 20 seconds, leaving both in a reconnect loop.
+- The SSE status snapshot is now bounded (`SESSION_STATUS_SNAPSHOT_LIMIT = 20`): running sessions
+  are reported first and the remaining slots are filled by most recently touched. The old
+  implementation reported every session the bridge had ever seen, so the official Web UI read
+  hundreds of session records on every connection and initial load never finished.
+- The project list reports the bridge's working directory: `GET /api/project` returns a bare
+  `Project[]`, and `GET /api/project/:projectID` and `PATCH /api/project/:projectID` return a bare
+  `Project` (PATCH currently only echoes and does not persist). The official server derives the
+  project list from the directory it serves, so the browser UI has a workspace to select.
+- `DSH_OC_HTTP_LOG=1` turns on HTTP request tracing: each request prints one line to stderr on
+  arrival, `[bridge/http] <METHOD> <path>`. This is the debugging tool for checking how the
+  browser UI calls the API when no browser is available.
+- Session revert: implemented with the OpenCode 2.1.0 semantics. Three routes
+  `POST /api/session/:id/revert/stage`, `DELETE /api/session/:id/revert`,
+  `POST /api/session/:id/revert/commit`, and three SSE events `session.revert.staged` /
+  `session.revert.cleared` / `session.revert.committed`. The boundary is **exclusive**: the named
+  message and everything after it are dropped on commit, and `before` on
+  `POST /api/session/:id/fork` is equally exclusive (dsh's fork copies the event prefix
+  **including** `atSeq`, so the cut point is the event before the boundary message). Commit forks
+  the dsh session at that cut point, and the opencode session id follows the fork (an alias):
+  later dsh calls are rewritten to the fork, the session list publishes the fork under the
+  original id and drops the replaced session, `GET /api/session/:id` and `/message` read the
+  fork's summary and history, the fork's SSE events are rewritten back to the original id, and
+  session-level state (model, agent preset, title, message id mapping) is inherited by the fork.
+  Files roll back grouped by dsh turn: stage rolls back in place the files changed by the turns
+  after the boundary and reports a diff (clear restores them, commit keeps the rollback), and
+  when the boundary is a user prompt that turn's files are rolled back as well. As in OpenCode,
+  the next prompt first commits any staged revert, and the prompt then lands in the rewritten
+  session.
+- Known limits of session revert: dsh cannot express an empty fork, so a cut point before the
+  first message returns 400 `cannot cut before the first message`; the file diff is one coarse
+  hunk between the first and last changed line (the same shape as the bridge's own file-change
+  diff), not a full LCS diff.
+- Add `scripts/e2e-revert-flow.mjs` (`pnpm run e2e:revert`) and `tests/e2e/revert.spec.ts`: a full
+  round of stage → clear → stage+commit → next prompt against the real bridge, asserting exclusive
+  boundaries, preserved message ids, an unchanged session id, and that a second rewind in the same
+  session also takes effect.
+- Fix the e2e driver's drift against dsh 0.2.1-rc.2 so the official TUI e2e runs for real: the
+  default proxy is enabled only when `127.0.0.1:14514` actually answers (otherwise pnpm reports a
+  tunnel error); the dsh process is matched by `--profile oc` (dsh is now
+  `node .../dsh/lib/bin.js --profile oc`); TUI startup no longer passes dsh's `--print-logs` (the
+  log covers the TUI's alternate screen, so pane capture never sees the input box); the mock LLM
+  server moves from `0.1.0-rc.6` to `0.2.1-rc.2` (the former requires `dsh-invariants@^0.1` and
+  the plugin manager rejects it); the config dump check now looks for `agent-preset-registry` +
+  `agent-preset` (dsh 0.2 split `agent-presets`); and the post-exit shell prompt detection accepts
+  powerline shapes.
+- Fix the second and later rewinds: the rewind plugin's fork now resolves the alias first, and the
+  bridge also uses the resolved dsh session id to take file snapshots, so the file set is no
+  longer empty.
+- Upgrade to official OpenCode 2.1.0: the pinned version becomes `2.1.0`, `@opencode/client`
+  follows to `2.1.0`, and the protocol probe baseline is re-recorded at 138 routes. Relative to
+  2.0.32, 2.1.0 has only one contract addition (`PATCH /api/permission/saved/:id`, which
+  narrows a remembered grant), and the bridge implements it; the rest are type renames
+  (`SessionMessageProviderState` becomes `SessionMessageNative`) and new event types
+  (`session.archived` / `session.unarchived`; dsh has no archive concept, so they are not emitted
+  yet).
+- Migrate to official OpenCode 2.0.32: TUI startup changes from `opencode attach <url>` to
+  `opencode --server <url>` (`--mini` uses `opencode mini --server <url>`); the 2.x CLI removed
+  the `attach` subcommand, and the old form fails with "Help requested".
+- Remove the v1 HTTP layer: `/session`, `/config`, `/provider`, `/global/event`, `/vcs*`,
+  `/permission`, `/question`, `/path`, `/project/*` are all retired, leaving only `/api/*`; the
+  bridge answers all 137 routes the OpenCode 2.x client calls
+  (`scripts/check-client-routes.mjs` verifies `missing: 0`).
+- SSE contract: the event stream must open with `server.connected` (the 2.x client rejects a
+  stream that does not start with it), and only then do the `Last-Event-ID` replay and the
+  status/control snapshot replay follow; that frame does not enter the replay ring.
+- Event vocabulary: while the bridge keeps publishing 1.18.18-shaped events, it adds the 2.x
+  native vocabulary (`session.text.*`, `session.tool.*`, `session.step.*`, `session.execution.*`,
+  `session.inbox.*`, `permission.*`, `form.*`, `session.compaction.*`), and the built-in TUI and
+  the OpenChamber UI read the same stream.
+- e2e and docs sync: the TUI startup command in scripts becomes the `--server` form, v1 routes
+  switch to their `/api/*` equivalents, version assertions become `2.0.32`; `docs/PROTOCOL.md`,
+  `docs/FEATURES.md` and the README are updated to the 2.x description.
+- Fix the local install resolver after release: resolve only the dsh-oc codeload SHA and
+  distinguish other packages such as dsh-dcp; without `rg` it uses a grep fallback verified in
+  isolation, and it fails closed when the scan fails or the SHA is missing or ambiguous.
 
 ## [0.2.0-rc.4] - 2026-09-11
 
-本候选面向 dsh `>=0.1.5-rc.2`，是 host ABI 破坏性适配：dsh 0.1.5 改了
-session-controller 依赖与 assistant 流式事件模型，**不再兼容 dsh 0.1.2 及更早**。
-发布/远端不可变标识以最终 GitHub notes 为准。
+This candidate targets dsh `>=0.1.5-rc.2` and is a breaking host ABI adaptation: dsh 0.1.5 changed
+the session-controller dependency and the assistant streaming event model, so it is **no longer
+compatible with dsh 0.1.2 and earlier**. Release and remote immutable identifiers are as given in
+the final GitHub notes.
 
-- 修复 profile 无法启动：dsh 0.1.5 的 `dsh-api-session-controller` 新增硬依赖
-  `fileUploads`，oc-bridge 现在按顺序插入 headless provider
-  `@chiro2001/dsh-oc/file-uploads`；`bindPrompt` 返回带 `Symbol.dispose` 的绑定，
-  满足 0.1.5 的显式资源管理（否则 prompt 以
-  `session/agent-busy` + `TypeError: Object not disposable` 失败）。
-- 实时流式移植：已删除的 `assistant/chunk` 会话事件改为全局订阅
-  `agent/assistant-stream` 帧（attempt `start` 记录 turn/step，`chunk` 复用原
-  chunk 翻译，`end` 回收 attempt），迟到且无 start 的帧安全丢弃。
-- 流式期间的 history 读：0.1.5 不再把 in-flight chunk 写进持久化日志，bridge 将
-  translator 的 live provisional assistant（id/created/文本块，`time.completed`
-  未设置）合并进 v1/v2 history 响应，保持 TUI 与 queue-live oracle 的 in-flight
-  契约（`scripts/e2e-tui-queue-live.sh`）。
-- 修复首个回合的 agent/model 标签：live provisional SSE 卡片、prompt 响应
-  placeholder 与流式中 v1/v2 history 不再硬编码 `build`/`deepseek-chat`，改为使用
-  会话已记录的 preset 与模型选择；prompt 未携带模型时回退到部署默认模型
-  （`placeholderSessionOptionsForPrompt`），shell 合成卡片同样优先会话模型。TUI 的
-  映射默认 agent `build` 由 `applyAgentFromBody` 解析为部署默认 preset，首回合即可
-  显示实际 preset。
-- 历史移植：`SessionHistoryRecord` 的 `chunks` 记录被内嵌
-  `assistant/message.stream` / `assistant/attempt.stream` 取代；`expandRecord`
-  把 packed run 还原为 `text-chunks`/`reasoning-chunks`/`tool-call-chunks` 行，
-  并从 raw `block-start`/`block-end`/`finish` 还原部件时长与 finish reason；
-  `assistant/attempt` 在 live 与历史都不产生 TUI surface。
-- 文件工具适配 dsh 0.1.5：`write`/`edit`（`dsh-tool-fs`）在新文件/无 presentation
-  回放时从调用参数合成 diff，opencode edit 卡片继续携带 `metadata.diff`；
-  `tests/e2e-tui-tools.sh` 的 untracked write 场景改用 `write` 工具。
-- 依赖与门禁：devDeps 升到 dsh 0.1.5-rc.2 / cordis 4.0.2，peer 范围收紧为
-  `>=0.1.5-rc.2`；CI 固定 dsh 0.1.5-rc.2；`pnpm install` 由 pnpm 维护
-  `pnpm-workspace.yaml` 的 prerelease 例外；replay 语料与 perf session 生成器
-  更新为 0.1.5 事件形状（session format v3）。
-- 恢复语义：0.1.5 不持久化未结算的流式内容，崩溃恢复后该回合可以没有 assistant
-  消息；`e2e-recovery-crash.sh` 的 oracle 改为“重启图是持久化前缀 + 不伪造崩溃
-  attempt + 新回合 exactly-once”，并继续断言 idle 与无残留进程。
-- 本地门禁全绿：`pnpm typecheck`、438 个单测（23 个文件）、probe 63/63、
-  `perf smoke (200)`、release artifact audit（干净重建零差异、pack 无绝对路径）、
-  `scripts/check-all.sh --e2e` 39/39 e2e 首跑 PASSED 且 0 retry；5000 会话压测见
-  [docs/perf/results-2026-09-11-rc4.md](perf/results-2026-09-11-rc4.md)。
+- Fix profiles failing to start: dsh 0.1.5's `dsh-api-session-controller` adds a hard dependency on
+  `fileUploads`, so oc-bridge now inserts the headless provider `@chiro2001/dsh-oc/file-uploads` in
+  order; `bindPrompt` returns a binding carrying `Symbol.dispose`, satisfying 0.1.5's explicit
+  resource management (otherwise the prompt fails with `session/agent-busy` +
+  `TypeError: Object not disposable`).
+- Live streaming port: the removed `assistant/chunk` session event becomes a global subscription to
+  `agent/assistant-stream` frames (attempt `start` records turn/step, `chunk` reuses the original
+  chunk translation, `end` reclaims the attempt), and a late frame without a start is dropped
+  safely.
+- History reads during streaming: 0.1.5 no longer writes in-flight chunks into the persisted log,
+  so the bridge merges the translator's live provisional assistant (id/created/text blocks,
+  `time.completed` unset) into the v1/v2 history response, keeping the in-flight contract of the
+  TUI and the queue-live oracle (`scripts/e2e-tui-queue-live.sh`).
+- Fix the agent/model label on the first turn: the live provisional SSE card, the prompt response
+  placeholder and streaming v1/v2 history no longer hardcode `build`/`deepseek-chat`; they use the
+  preset and model selection already recorded on the session, and fall back to the deployment
+  default model when the prompt carries none (`placeholderSessionOptionsForPrompt`); shell
+  synthesized cards likewise prefer the session model. The TUI's mapped default agent `build` is
+  resolved by `applyAgentFromBody` to the deployment default preset, so the first turn already
+  shows the real preset.
+- History port: `SessionHistoryRecord`'s `chunks` record is replaced by embedded
+  `assistant/message.stream` / `assistant/attempt.stream`; `expandRecord` restores packed runs into
+  `text-chunks`/`reasoning-chunks`/`tool-call-chunks` lines, and restores part timings and the
+  finish reason from raw `block-start`/`block-end`/`finish`; `assistant/attempt` produces no TUI
+  surface in either live or history.
+- File tools adapted to dsh 0.1.5: `write`/`edit` (`dsh-tool-fs`) synthesize a diff from the call
+  arguments for new files or when no presentation is replayed, and opencode edit cards keep
+  carrying `metadata.diff`; the untracked write scenario in `tests/e2e-tui-tools.sh` switches to
+  the `write` tool.
+- Dependencies and gates: devDeps move to dsh 0.1.5-rc.2 / cordis 4.0.2, and the peer range
+  tightens to `>=0.1.5-rc.2`; CI pins dsh 0.1.5-rc.2; pnpm maintains the prerelease exception in
+  `pnpm-workspace.yaml` for `pnpm install`; the replay corpus and the perf session generator move
+  to the 0.1.5 event shape (session format v3).
+- Recovery semantics: 0.1.5 does not persist unsettled streaming content, so a turn may have no
+  assistant message after crash recovery; the `e2e-recovery-crash.sh` oracle becomes "the restart
+  graph is a persisted prefix + no fabricated crashed attempt + the new turn is exactly-once", and
+  it still asserts idle and no leftover processes.
+- All local gates green: `pnpm typecheck`, 438 unit tests (23 files), probe 63/63,
+  `perf smoke (200)`, release artifact audit (clean rebuild with zero diff, no absolute paths in
+  the pack), `scripts/check-all.sh --e2e` 39/39 e2e PASSED on the first run with 0 retries; the
+  5000-session stress test is in
+  [docs/perf/results-2026-09-11-rc4.md](perf/results-2026-09-11-rc4.md).
 
 ## [0.2.0-rc.3] - 2026-09-08
 
-本候选面向 dsh `>=0.1.2-rc.1`；发布/远端不可变标识以最终 GitHub notes 为准。
+This candidate targets dsh `>=0.1.2-rc.1`; release and remote immutable identifiers are as given in
+the final GitHub notes.
 
-- 修复官方 OpenCode 1.18.18 prompt 的顶层 `variant` 解析：`max`/`off` 在多轮
-  对话中持续传递，省略 variant 的 Default 会正确回到 dsh 后端默认；session、用户
-  卡片、live/queued SSE 与 v1/v2 history 的实际模型 effort 保持同步。
-- 增加 max/max、off/off、max→Default 的 bridge optimistic-card 回归，以及真实 host
-  API e2e 对 session/history/live model ref 的确定性校验。
-- 用户手动 TUI 的 max/off 多轮验证通过；本地确定性 host oracle 进一步断言 provider
-  request body：max 为 `thinking.enabled + reasoning_effort=max`，off 为
-  `thinking.disabled` 且不携带 `reasoning_effort`。
-- 本地完整门禁覆盖 435 个单元测试、63/63 协议探针、perf smoke、工件审计与 39 个
-  e2e（含真实 TUI、recovery、golden trace），全部首跑通过且无 retry。
-- 远端 CI 反馈并修复两项门禁问题：permission TUI 选择状态改为主题无关的 ANSI
-  前景签名同步；artifact path scanner 在无 `rg` 环境下改为 fail-closed 并提供回归覆盖。
+- Fix top-level `variant` resolution for official OpenCode 1.18.18 prompts: `max`/`off` keep
+  flowing across multiple turns, and the Default that omits variant correctly returns to the dsh
+  backend default; the actual model effort stays in sync across the session, user cards,
+  live/queued SSE and v1/v2 history.
+- Add bridge optimistic-card regressions for max/max, off/off and max→Default, plus deterministic
+  checks of the session/history/live model ref in a real host API e2e.
+- Manual multi-turn max/off validation in the TUI passes; the local deterministic host oracle
+  further asserts the provider request body: max is `thinking.enabled + reasoning_effort=max`, off
+  is `thinking.disabled` with no `reasoning_effort`.
+- The full local gate covers 435 unit tests, 63/63 protocol probes, perf smoke, artifact audit and
+  39 e2e (including the real TUI, recovery and golden trace), all passing on the first run with no
+  retries.
+- Two gate issues from remote CI feedback are fixed: permission TUI selection state now syncs
+  through a theme-independent ANSI foreground signature, and the artifact path scanner fails
+  closed without `rg` and gains regression coverage.
 
 ## [0.2.0-rc.2] - 2026-09-08
 
-本版本面向 dsh `>=0.1.2-rc.1`，包含 Issue #4/#5 及发布前的稳定性收敛。
+This version targets dsh `>=0.1.2-rc.1` and includes Issue #4/#5 plus the stability convergence
+before release.
 
-- 新增官方 OpenCode `!` shell mode：`POST /session/:id/shell` 通过 dsh Agent 的
-  `runMaintenance` 保证 idle ownership，再以当前 OS 用户身份启动精确 shell
-  子进程/进程组；不绕过或假称 dsh approval/sandbox。running/completed/error、
-  abort、busy/idle、`session.idle` exactly-once 和 bridge history 投影均有回归；
-  完成后通过 `Agent.inject()` 将带 `plugin: dsh-oc` 标记的用户手动命令与
-  stdout/stderr 注入下一次模型 prompt，但不会自动开启模型回合；模型注入有独立
-  UTF-8 预算，并在注入失败时把可见警告写入 shell 卡；命令/输出可能包含敏感信息，
-  会发送给当前配置的模型；新增路由探针、真实 TUI + mock 模型 e2e 与协议说明，
-  并通过完整 e2e 与用户手动 TUI 验证。
-- 修复 `/preset` 切换后 synthetic command result 缺少完成时间，导致官方 TUI
-  将 `preset switched to ...` 卡片一直显示为 `QUEUED`，直到下一轮对话才清除；
-  切换卡片现在同时回显切换后的实际模型/variant；增加 bridge 单测、v1/v2 history
-  与真实 TUI 回归断言。
+- Add the official OpenCode `!` shell mode: `POST /session/:id/shell` takes idle ownership through
+  the dsh Agent's `runMaintenance`, then starts the exact shell subprocess/process group as the
+  current OS user; it neither bypasses nor pretends to have dsh approval/sandbox.
+  running/completed/error, abort, busy/idle, `session.idle` exactly-once and the bridge history
+  projection all have regressions; after completion, `Agent.inject()` injects the user's manual
+  command marked with `plugin: dsh-oc` plus stdout/stderr into the next model prompt, but does not
+  start a model turn on its own; model injection has its own UTF-8 budget, and an injection failure
+  writes a visible warning into the shell card; commands and output may contain sensitive
+  information and are sent to the currently configured model; a route probe, a real TUI + mock
+  model e2e and protocol documentation are added, and the feature is validated by the full e2e and
+  a manual TUI run.
+- Fix the synthetic command result after a `/preset` switch missing its completion time, which
+  made the official TUI show the `preset switched to ...` card as `QUEUED` until the next turn
+  cleared it; the switch card now also echoes the actual model/variant after the switch; bridge
+  unit tests, v1/v2 history and real TUI regression assertions are added.
 
 ## [0.2.0-rc.1] - 2026-09-07
 
-> 本候选面向 dsh `>=0.1.2-rc.1`。PR #1/#2/#3 未原样合入；其有效修复与
-> dsh 0.1.2 迁移经过语义重整合，当前分支是独立的 RC 候选。
+> This candidate targets dsh `>=0.1.2-rc.1`. PR #1/#2/#3 were not merged as-is; their effective
+> fixes and the dsh 0.1.2 migration went through a semantic re-integration, and the current branch
+> is an independent RC candidate.
 
-### 变更
+### Changed
 
-- bridge 从旧 `apiProxy` envelope 迁移到 dsh 0.1.2 的
-  `sessionController`、`agentPresets`、`goals`、`sessionSkillCatalog`、
-  `agents`、`sessions`、`sessionProjections` host services。
-- 重整合模型选择、默认模型/preset、队列可见性、approval/question、subagent
-  lineage、history pagination 与 dsh 0.1.2 error ABI；保留稳定的 v1/v2
-  OpenCode protocol surface。
-- 新增 `Last-Event-ID` 有界 SSE ring（事件数与序列化字节双上限），断线游标
-  命中时只回放缺失事件，淘汰/未知游标回退到 status/control snapshot。
-- `/session/status` 改为 dsh `api-session/status` 驱动的内存热路径；冷启动最多
-  一次有界 `session.list` seed，避免官方 TUI 250ms 等待轮询触发全量持久化 I/O。
-- OpenTUI native 临时文件隔离到 `$DSH_HOME/opencode/tmp/tui-<pid>`，正常退出
-  清理、下次启动回收已退出实例；不搜索任意插件缓存，不关闭官方 binary 校验。
-- dsh-dcp rc.6 的 `session.events` 兼容 getter 暂时保留，待 dcp 完成 dsh
-  0.1.2 peer/API 迁移后删除。
-- 增加安全默认的 `scripts/monitor-process-io.sh`（observe-only；只允许清理
-  脚本自己以 `setsid` 启动并校验过的进程组）及 fake attach 空闲回归。
+- The bridge migrates from the old `apiProxy` envelope to the dsh 0.1.2 host services
+  `sessionController`, `agentPresets`, `goals`, `sessionSkillCatalog`, `agents`, `sessions`,
+  `sessionProjections`.
+- Model selection, default model/preset, queue visibility, approval/question, subagent lineage,
+  history pagination and the dsh 0.1.2 error ABI are re-integrated; the stable v1/v2 OpenCode
+  protocol surface is preserved.
+- Add a bounded `Last-Event-ID` SSE ring (limits on both event count and serialized bytes); a live
+  cursor replays only the missing events, and an evicted or unknown cursor falls back to the
+  status/control snapshot.
+- `/session/status` becomes an in-memory hot path driven by dsh `api-session/status`; cold start
+  seeds at most once with a bounded `session.list`, avoiding the full persistent I/O triggered by
+  the official TUI's 250ms wait polling.
+- OpenTUI native temp files are isolated to `$DSH_HOME/opencode/tmp/tui-<pid>`; a normal exit
+  cleans up and the next start reclaims exited instances; it does not search arbitrary plugin
+  caches and does not disable official binary verification.
+- The `session.events` compatibility getter for dsh-dcp rc.6 is kept for now and removed once dcp
+  completes its dsh 0.1.2 peer/API migration.
+- Add `scripts/monitor-process-io.sh` with safe defaults (observe-only; it may only clean up
+  process groups the script itself started with `setsid` and verified) plus a fake attach idle
+  regression.
 
-### 验证
+### Verification
 
-- typecheck、418 个单元测试、协议 probe fixture 全部通过、5000 会话性能测试、
-  发布工件审计和完整真实 TUI e2e 已通过；rc.1 发布时 probe 基线为 62/62，rc.2
-  新增 shell route 后的发布基线为 63/63；高风险 flake scan 首跑 30/30，无 retry。
-- GitHub CI、full-SHA 冷装、真实 TUI smoke、同 ABI 回滚演练和真实 DeepSeek
-  quick smoke 已通过。发布四元组与哈希见 GitHub prerelease 说明。
+- typecheck, 418 unit tests, the full protocol probe fixture, the 5000-session performance test,
+  the release artifact audit and the full real TUI e2e pass; the probe baseline was 62/62 at rc.1
+  release and 63/63 at rc.2 release after the shell route was added; the high-risk flake scan was
+  30/30 on the first run with no retries.
+- GitHub CI, full-SHA cold install, real TUI smoke, same-ABI rollback drill and a real DeepSeek
+  quick smoke pass. The release quadruple and hashes are in the GitHub prerelease notes.
 
-### 发布前收敛
+### Pre-release convergence
 
-- dsh `subagent` / `subagent_fork` 已转换为原生 OpenCode `task` 卡片，保留
-  delegation 与 child session lineage；新增真实 TUI Task 导航回归。
-- 固定 optimistic user / provisional assistant 的消息时间身份，修复首条回复或
-  reasoning/tool card 重复渲染；真实 TUI 对工具卡做 exactly-once 断言。
-- 收紧 crash recovery 的精确 tmux 父子 PID、run-scoped leftover 检查和
-  observe-only flake scan，避免按名称操作外部 orphan 进程。
-- GitHub e2e workflow 固定 dsh `0.1.2-rc.1`，perf 启动失败即时报告；full-SHA
-  安装/回滚校验 lockfile 实际 commit，并记录旧 dsh ABI 的联合回滚要求。
-- v2 会话摘要/历史按 child label 或 parent-local FIFO 绑定并保留
-  `metadata.origin`，避免同父同描述的多个 child 被错误复用。
+- dsh `subagent` / `subagent_fork` are converted to native OpenCode `task` cards, preserving
+  delegation and child session lineage; a real TUI Task navigation regression is added.
+- Message time identity is fixed for the optimistic user / provisional assistant, fixing duplicate
+  rendering of the first reply or of reasoning/tool cards; the real TUI asserts exactly-once on
+  tool cards.
+- Crash recovery tightens the exact tmux parent/child PIDs, the run-scoped leftover check and the
+  observe-only flake scan, so it never operates on external orphan processes by name.
+- The GitHub e2e workflow pins dsh `0.1.2-rc.1` and reports perf startup failures immediately;
+  full-SHA install/rollback verifies the actual commit in the lockfile and records the joint
+  rollback requirement of the old dsh ABI.
+- v2 session summary/history binds by child label or parent-local FIFO and keeps
+  `metadata.origin`, so multiple children with the same parent and description are not reused by
+  mistake.
 
-### 修复
+### Fixed
 
-- 用户 prompt 改为以 dsh `mode: 'steer'` 提交：运行中的 turn 在下一个 step
-  边界就能看到插入的消息，与官方 opencode“追加进会话流、loop 下一步即处理”
-  的语义一致。此前一律 `mode: 'queue'`（next-turn），插入的消息要等整轮结束
-  （或 abort）才被模型看到——真实会话 e0336d8b 中，用户给出论文确切标题后
-  模型继续搜索约 4 分钟才看到；新回归单测锁定 busy 时 prompt 以 steer 送达，
-  队列相关 e2e（QUEUED 徽标、FIFO、golden trace）全部通过。
-- 模型选择不再在首轮后回退到默认模型：TUI 会在会话切换时用“最后一条用户
-  消息”恢复 prompt 的模型，而 bridge 此前把用户消息（历史与排队回显卡片）
-  一律标成模型目录首个条目（deepseek-v4-flash），导致第二次提问悄悄切回
-  flash。现在历史与回显使用会话当前模型（`session.models`）或 prompt body
-  携带的模型；新增两条回归单测固化“Pro 首轮后不回落 flash”。
+- User prompts are now submitted with dsh `mode: 'steer'`: a running turn sees the inserted
+  message at the next step boundary, matching official opencode's "append to the session stream,
+  the loop handles it on the next step" semantics. Previously everything used `mode: 'queue'`
+  (next-turn), so an inserted message was only seen by the model after the whole turn ended (or
+  was aborted) — in real session e0336d8b, the model kept searching for about 4 minutes after the
+  user gave the exact paper title. New regression unit tests lock that a prompt is delivered as
+  steer while busy, and the queue-related e2e (QUEUED badge, FIFO, golden trace) all pass.
+- Model selection no longer falls back to the default model after the first turn: on session
+  switch the TUI restores the prompt model from the "last user message", and the bridge previously
+  labelled user messages (history and queued echo cards) with the first catalog entry
+  (deepseek-v4-flash), so the second question silently switched back to flash. History and echoes
+  now use the session's current model (`session.models`) or the model carried in the prompt body;
+  two regression unit tests fix "Pro does not fall back to flash after the first turn".
 
 ## [0.1.0] - 2026-08-18
 
-### 新增
+### Added
 
-- `CONTRIBUTING.md` 自测门槛补充发布/构建产物审计项。
-- `.github` 模板升级：bug 报告改用 `dsh-oc --version`；PR 自测清单补充
-  工件审计与全量 e2e 选项。
-- `bridge-router.spec.ts` 追加“翻页间追加消息”游标契约测试：首页后追加新
-  回合，旧页游标不变、无重复，全量读取恰好包含追加内容一次。
-- `bridge-router.spec.ts` 新增分页边界不变量测试：`limit` 切过工具回合时，
-  `after`/`next` 以已转换消息的最旧 seq 为锚点，工具事件（tool/call、
-  tool/result 不独立成消息）整体落在同一侧页，跨页合并后工具 part 恰好
-  一次且为 completed。
-- `AGENTS.md` 更新 e2e 时长表述（稳定套件已扩展到约 15–20 分钟）。
-- `docs/ROADMAP.md` 修正 LATER 说明：`/api/credential/*` 实际存在 dsh
-  `credentials.describe/set/unset` RPC，但 opencode SDK 1.18.18 无消费
-  路由，维持 LATER 待上游协议出现。
-- `docs/RELEASE.md` 增加“当前候选就绪状态（12ca493）”汇总：本地/CI 门禁、
-  flake/性能/真实模型/安装链路/归因实验证据一览。
-- `dsh-oc --version` 在 dsh 缺失时与其他路径一致：退出 127 并输出安装提示
-  （此前以 1 退出且无提示）；新增 bin 单测。
-- `docs/PROTOCOL.md` 补齐 v2 路由表：`/api/session/{id}/history`
-  （`after` 独占上界 + `next` 游标语义）、`prompt`/`model`/`agent` 端点，
-  并注明跨页分页不变量。
-- `e2e-tui-turn.sh` 增加工具 part 恰好一次断言：历史中 bash 工具卡片只能
-  出现 1 次（“动态工具调用两次相同显示”回归项）。
-- `e2e-tui-preset-inherit.sh`：对话前 `/preset minimal`（含选择器确认
-  Enter）后创建新会话，断言新 dsh 会话继承 minimal preset（“对话前
-  /preset 无法改变 preset”回归项）；已入稳定套件，本地 3/3 通过。
-- `scripts/update-local-install.sh`：一键把本地 dsh profile 更新到指定
-  GitHub ref，并校验 resolved commit 与 `dsh-oc --version` 双版本输出。
-- 工件审计新增 pack 内容校验：tarball 不得含 `src/`，且
-  `bin/dsh-oc.mjs`、`lib/index.js`、`lib/bridge/router-entry.js`、
-  `opencode-version.json`、`cordis.patch.yml` 必须在包内。
-- `e2e-queued-order-repro.sh` 稳定性修复：第二条 prompt 改为在工具 part
-  出现（而非完成后）即发送，保证仍处于 busy 窗口、QUEUED 徽标必然出现；
-  后续文本加长到 15 段。本地 10/10 flake 扫描通过（48s/次），修复 CI
-  slow-runner 下 “queued prompt not shown” 的失败；queued-followup 黄金
-  基线已刷新到新场景（180 事件）。
-- 5000 会话性能基准记录（commit `609ccd6`）：列表/消息/历史/分页/标题补温/
-  RSS 数据见 docs/perf/results-5000-2026-08-17.md，与 8-15 基线量级一致。
-- `e2e-real-llm.sh` 强化断言（round-0002 指出真实回归偏弱）：queue probe
-  现在验证 FIFO 内容顺序（第二条 prompt 是最后一条 user、最后回复含“完成”），
-  不再只数 user 总数；TUI 键盘输入改为等待投递与回复 idle，并断言恰好新增
-  一条 user 且面板留档。顺带修复 TUI 阶段 bridge URL 未刷新的潜在 bug，
-  `wait_idle`/计数函数对瞬时 API 失败容错。
-- flake 合并基线：6 个最小高风险脚本各 10 次共 60 次首跑全绿（当前 HEAD），
-  结果见 docs/perf/results-flake-consolidated-2026-08-17.md。
-- `e2e-cli-bin.sh` 增加 `dsh-oc --version` 断言：输出必须是
-  `dsh-oc <semver> (dsh <version>)` 双版本格式。
-- `SseHub.enqueue`：无客户端连接时缓冲事件，首个 SSE 客户端接入时立即
-  冲刷（raw 回放/恢复场景的晚连接不再丢事件）；新增单测锁定缓冲与即时
-  广播行为。
-- 最小 server 支持 raw SSE 直放模式（`minimal-oc-server.mjs --sse <trace.raw>`）：
-  把录制的桥 SSE 事件按原序广播给官方 TUI；复现驱动支持自定义 marker、
-  事件延迟、CJK 启发式与抓拍时长（`DSH_OC_MINIMAL_*`）。真实会话原始
-  JSONL 与完整桥 SSE 轨迹的回放均已接入：fixture 回放渲染顺序正确；raw
-  直放定位到官方 TUI 的 `/global/event` 连接为短暂探针（fixture 模式依赖
-  连接内流式事件在窗口内送达，外部广播窗口太短），暂不渲染对话，列为后续
-  实验项；截取关键区段 + 80ms 慢速重放仍未渲染，raw 直放路线关闭（工具
-  保留）；raw 模式下 mux 保持挂起避免桥主动断连。`e2e-real-queued-order.sh`
-  改为首个 prompt 前开始录全量 `/global/event` 轨迹，真实模型连续三次
-  复现 wire 前提。
-- 官方最小 server 归因 harness：`scripts/minimal-oc-server.mjs` 用桥组件 +
-  脚本化事件序列（无 dsh、无真实模型）提供完整 OpenCode 兼容面，
-  `scripts/e2e-minimal-server-repro.sh` 驱动官方 1.18.18 TUI attach 并
-  逐帧分析排队/后续文本顺序；首次运行官方 TUI 渲染顺序正确（后续文本在
-  排队卡片上方）。桥新增 `src/bridge/router-entry.ts` 构建入口导出
-  `createBridgeRouter`/`startBridgeServer` 供 harness 使用。
-- 真实模型排队错序复现 `scripts/e2e-real-queued-order.sh`（manual，真实
-  DeepSeek API）：工具完成后立即键盘排队第二条 prompt，记录 bridge SSE
-  时序证据（后续文本 delta 是否在排队用户事件后到达）与流式面板帧；
-  连续两次运行 `wire_follow_after_queued=1`，面板 45/50 帧回复内容渲染在
-  排队卡片下方。同时修正 e2e-real-llm/e2e-real-queued-order 的
-  `DSH_OC_REAL_KEEP_RUN=1` 清理逻辑（此前反向，keep 时反而删除）。
-- 候选 opencode 升级 lane `scripts/upgrade-lane.sh`：对候选二进制跑黄金
-  场景并把归一化 SSE 轨迹与 1.18.18 基线语义差分（`--bin`/`--out`），
-  同版本验证零差异；版本检查旁路 `DSH_OC_BYPASS_VERSION_CHECK=1` 仅作用于
-  lane 场景，生产路径仍强制版本一致。
-- 错序复现记录 `scripts/e2e-queued-order-repro.sh`：工具+慢流后续文本期间
-  从键盘排队第二条 prompt，逐帧抓拍官方 TUI 面板顺序（瞬态错序检测），并
-  冻结第二份 1.18.18 黄金 SSE 基线
-  `tests/fixtures/golden/queued-followup-1.18.18.sse.jsonl`；mock 驱动连续
-  运行未观察到瞬态错序，记录作为 renderer/bridge 归因证据。
-- 1.18.18 黄金 SSE 轨迹基线：`scripts/e2e-golden-trace.sh` 在真实 TUI 上
-  跑“工具+后续文本”场景并用观察者 SSE 录轨，`scripts/normalize-golden-trace.mjs`
-  归一化（去随机 id、绝对时间、机器路径），基线提交到
-  `tests/fixtures/golden/`；重复运行结构一致，已入 stable 套件，供未来
-  vendor 升级语义差分。
-- 最小 permission e2e `scripts/e2e-tui-permission-mini.sh`：真实 TUI 单次
-  Allow-once 循环（弹窗 → 批准 → 工具完成 → 恰好一次回复 → 无残留权限），
-  10–11s；已入 stable 套件，flake 扫描 10/10 全绿。
-- flake 扫描第二轮：`e2e-tui-queue-live.sh` 与 `e2e-tui-agent-tab.sh`
-  各 10 次首跑全绿（此前 CI 偶发 flake 的两个脚本），结果见
-  docs/perf/results-flake-tui-2026-08-17.md。
-- 真实会话 feature 覆盖扫描 `scripts/replay-corpus-manifest.mjs`：只输出
-  事件类型/特征计数，不接触真实内容；64 个真实会话的 12 个特征已全部被
-  合成语料覆盖（long-session 由 spec 运行时生成覆盖），报告见
-  docs/perf/coverage-real-sessions-2026-08-17.md。
-- 确定性回放语料（实验 1c）：`scripts/build-replay-corpus.mjs` 生成 10 个
-  结构保持的合成 fixture（reasoning、单/多工具、排队、工具错误、compaction、
-  打断、goal、plugin-context、session-title、unfinished-turn）到
-  `tests/fixtures/replay/`；`tests/replay-corpus.spec.ts` 回放审计：无未处理/
-  翻译错误、工具调用配对且终态、live 完成态与 durable 一致、durable v1/v2
-  消息面一致、运行时 10k 事件长会话。
-- 预算化 flake 扫描 `scripts/flake-mini-scan.sh`：对最小高风险 e2e 脚本
-  重复 N 次（默认 10），记录首败与耗时，语义失败立即停止且不重试；恢复
-  三故障域首轮各 10 次全绿（结果见 docs/perf）。
-- 恢复 oracle 增加崩溃语义：`recovery_assert_crash_prefix` 允许重启图是
-  观察图的完整消息前缀，或等长时最后文本 part 是观察文本的前缀（SIGKILL
-  落在最后 chunk 落盘边界内属正常崩溃一致性，不是数据丢失）。
-- 发布工件审计 `scripts/verify-release-artifacts.sh`（已入 `check-all` 门禁）：
-  从 HEAD 源码干净重建并断言 committed `lib/` 零差异；npm pack 扫描机器
-  绝对路径；输出 package version、tarball sha256 与 package-tree hash。
-- 安装/升级/回滚演练 `scripts/e2e-install-rollback.sh`（manual）：从远端
-  GitHub full SHA 冷装候选并跑真实 TUI smoke，回滚到前版 spec 复跑，同
-  profile 内探测 re-add 行为；版本 bump 前 in-place 结果仅作命令路径验证。
-- 恢复故障域 e2e 矩阵：
-  - `scripts/e2e-recovery-crash.sh`：SIGKILL dsh 在慢流中途，`--session`
-    重启后断言持久前缀 exactly-once（不丢、不伪造完成）、会话回 idle（必要时
-    显式取消在途回合）且新 prompt 可继续（20s）。
-  - `scripts/e2e-recovery-sse-reconnect.sh`：观察者 SSE 断流重连，断言重连
-    后继续收事件且最终 v1/v2 消息图 exactly-once（13s）。
-  - mux 重订阅单测：重放的 text-chunks 跨 translator 重建由连接级 replay
-    guard 去重，不重复发送 delta。
-- 恢复断言 helper 收敛到 `tests/e2e/recovery-lib.sh`（v1/v2 签名、权威
-  idle、前缀/完全一致比较），`e2e-recovery-consistency.sh` 复用同一 oracle。
-- `GET /api/session/{id}/history`：SDK v2 历史端点（`limit` + `after` 事件
-  seq 游标），返回 `{ data: SessionMessage[], hasMore, next }`；`after` 为
-  独占上界（dsh 原生 `beforeSeq`，向后翻页），单页延迟有界；v2 消息转换
-  新增消息锚点 seq 记录，`after` 为负数返回 400。
-- 后台子代理能力开启：`GET /experimental/capabilities` 返回
-  `{ backgroundSubagents: true }`，并新增
-  `POST /experimental/session/{id}/background` no-op 成功路由（dsh 会话
-  服务端常驻，`subagent` 工具默认后台运行）。
-- `GET /session/{id}/children`：按 `parentSessionId` 返回 subagent 子会话
-  列表，配合后台子代理能力供 TUI 子代理树查询。
-- `GET /experimental/session`：GlobalSession 列表（支持 search/目录过滤/limit
-  子集），补齐 experimental 会话列表面。
-- `POST /session/{id}/init`：no-op 成功 `true`（dsh 会话创建即初始化）。
-- `GET /session/{id}/message/{messageID}`：单条消息查询（v1 转换复用，
-  未找到返回 404）。
-- `POST /session/{id}/permissions/{permissionID}`：SDK v2 权限回复别名
-  （body 用 `response` 字段），映射到同一 `permissionReply`。
-- `GET /api/health`：返回 `{ healthy: true }` 供客户端探活。
-- `GET /api/session/active`：返回当前活动会话（`{ data: { [sessionId]: { type: "running" } } }`）。
-- `POST /api/session/{id}/wait`：有界轮询等待会话空闲（≤30s，空闲 204）。
-- `GET /api/session/{id}/context`：返回 `{ data: SessionMessage[] }`（v2 消息转换复用）。
-- `GET /api/session/{id}/event`：按会话过滤的 SSE 事件流（`/global/event` 子集）。
-- `GET /api/session/{id}/message/{messageID}`：v2 单条消息查询（`{ data: SessionMessage }`）。
-- `GET /api/provider/{id}`：单 provider 查询（`{ location, data: ProviderV2Info }`）。
-- SDK v2 权限面补全：`GET /api/permission/request`、`GET /api/question/request`
-  （全局 pending 列表，`{ location, data }`）、`GET /api/session/{id}/permission/{rid}`
-  （单条查询，session 不匹配 404）、`DELETE /api/permission/saved/{id}`
-  （删除 `sessionID:toolName` 内存授权）；`GET /api/permission/saved` 输出对齐
-  SDK `PermissionSavedInfo`（`projectID/action/resource`，保留 `sessionID/grantedAt`）。
-- 真实 VCS 面：`GET /vcs`、`GET /vcs/status`、`GET /vcs/diff`、`GET /vcs/diff/raw`
-  从 stub 升级为真实 git 读取（当前分支、origin 默认分支、staged+unstaged
-  文件状态与行数、每文件/原始 unified diff；untracked 不进入 status）。
-- 工作区文件系统面：`GET /api/fs/read/{path}`（原始字节，越界路径 400，
-  单文件 5 MiB 上限）、`GET /api/fs/list`、`GET /api/fs/find`（递归查找，
-  跳过依赖/构建目录并限制结果数）；路由匹配新增尾段 `*` 通配支持。
-- 生命周期面：`GET /global/health`（`{ healthy: true, version }`）、
-  `POST /global/dispose` 与 `POST /instance/dispose`（no-op 确认，进程由 dsh 管理）。
-- 会话列表真实标题补读：dsh `session.list` 不返回 title 投影，bridge 按会话
-  补读 history tail 投影并缓存（≤40 全量同步；更大列表不阻塞，后台低并发
-  补最近 24 个、并发 2），恢复的旧会话也会在退出提示中正确识别。
-- Esc 打断/取消：`turn.wait` / `turn.idle` 事件驱动 TUI 运行态；全量 TUI
-  连按两次 Esc、`--mini` 按一次 Esc 会调用 `session.cancel` 停止在途流。
-- `/preset` 新会话继承：最近选择的 agent preset 会应用到后续 `/new` 创建的
-  会话；切换后广播 `session.updated` 携带新 agent。
-- 退出提示说明：opencode 官方退出 splash（全量/`--mini`）无法替换，dsh-oc
-  在会话有内容时于其下方输出一行说明（session id 属于 dsh，恢复用
-  `dsh --profile oc --session <id>`）；`DSH_OC_DISABLE_EXIT_NOTE=1` 可关闭。
+- `CONTRIBUTING.md` self-test gates gain release/build artifact audit items.
+- `.github` templates updated: bug reports use `dsh-oc --version`; the PR self-test checklist gains
+  the artifact audit and the full e2e option.
+- `bridge-router.spec.ts` adds a cursor contract test for "appending messages between pages": after
+  the first page, new turns are appended, the old page cursor does not change, there are no
+  duplicates, and a full read contains the appended content exactly once.
+- `bridge-router.spec.ts` adds a pagination boundary invariant test: when `limit` cuts through a
+  tool turn, `after`/`next` anchor on the oldest seq of the converted messages, tool events
+  (tool/call, tool/result are not separate messages) land entirely on one side of the page, and
+  after merging across pages the tool part appears exactly once and is completed.
+- `AGENTS.md` updates the e2e duration wording (the stable suite has grown to about 15–20 minutes).
+- `docs/ROADMAP.md` corrects the LATER note: `/api/credential/*` does exist as the dsh
+  `credentials.describe/set/unset` RPC, but opencode SDK 1.18.18 has no consuming route, so it
+  stays LATER until an upstream protocol appears.
+- `docs/RELEASE.md` adds a "current candidate readiness (12ca493)" summary: local/CI gates,
+  flake/performance/real model/install chain/attribution experiment evidence at a glance.
+- `dsh-oc --version` now behaves like the other paths when dsh is missing: exits 127 with an
+  install hint (previously exited 1 with no hint); bin unit tests are added.
+- `docs/PROTOCOL.md` completes the v2 route table: `/api/session/{id}/history` (`after` exclusive
+  upper bound + `next` cursor semantics), the `prompt`/`model`/`agent` endpoints, and notes the
+  cross-page pagination invariant.
+- `e2e-tui-turn.sh` adds an exactly-once assertion for tool parts: the bash tool card may appear
+  only once in history (the "dynamic tool call displayed twice" regression item).
+- `e2e-tui-preset-inherit.sh`: after `/preset minimal` (including Enter on the selector) before the
+  conversation, create a new session and assert the new dsh session inherits the minimal preset
+  (the "cannot change the preset with /preset before the conversation" regression item); it is in
+  the stable suite and passes 3/3 locally.
+- `scripts/update-local-install.sh`: update the local dsh profile to a given GitHub ref in one
+  command and verify both the resolved commit and the `dsh-oc --version` output.
+- The artifact audit adds pack content verification: the tarball must not contain `src/`, and
+  `bin/dsh-oc.mjs`, `lib/index.js`, `lib/bridge/router-entry.js`, `opencode-version.json`,
+  `cordis.patch.yml` must be in the package.
+- `e2e-queued-order-repro.sh` stability fix: the second prompt is sent as soon as the tool part
+  appears (not after it completes), guaranteeing it is still inside the busy window and the QUEUED
+  badge must appear; the following text grows to 15 segments. The local 10/10 flake scan passes
+  (48s each), fixing the CI slow-runner failure "queued prompt not shown"; the queued-followup
+  golden baseline is refreshed to the new scenario (180 events).
+- 5000-session performance baseline recorded (commit `609ccd6`): list/message/history/pagination/
+  title backfill/RSS data in docs/perf/results-5000-2026-08-17.md, the same order of magnitude as
+  the 8-15 baseline.
+- `e2e-real-llm.sh` strengthens assertions (round-0002 noted the real regression was weak): the
+  queue probe now verifies FIFO content order (the second prompt is the last user message and the
+  final reply contains the requested two-character answer) instead of counting user messages; TUI
+  keyboard input waits for delivery and reply idle, and asserts exactly one new user message plus a
+  panel record. It also fixes a latent bug where the bridge URL was not refreshed in the TUI phase,
+  and makes `wait_idle`/count helpers tolerant of transient API failures.
+- flake consolidated baseline: 6 minimal high-risk scripts, 10 first runs each for 60 runs total,
+  all green (current HEAD), results in docs/perf/results-flake-consolidated-2026-08-17.md.
+- `e2e-cli-bin.sh` adds a `dsh-oc --version` assertion: the output must be the two-version format
+  `dsh-oc <semver> (dsh <version>)`.
+- `SseHub.enqueue`: buffer events when no client is connected and flush them immediately when the
+  first SSE client attaches (a late connection in raw replay/recovery scenarios no longer loses
+  events); unit tests lock the buffering and immediate broadcast behavior.
+- The minimal server supports a raw SSE direct-replay mode
+  (`minimal-oc-server.mjs --sse <trace.raw>`): it broadcasts recorded bridge SSE events to the
+  official TUI in their original order; the repro driver supports custom markers, event delay, a
+  CJK heuristic and capture duration (`DSH_OC_MINIMAL_*`). Replay of real-session raw JSONL and of
+  complete bridge SSE traces are both wired in: fixture replay renders in the correct order; raw
+  direct replay located the official TUI's `/global/event` connection as a short-lived probe
+  (fixture mode relies on in-connection streaming events arriving inside the window, and the
+  external broadcast window is too short), so it does not render the conversation for now and is
+  listed as a follow-up experiment; capturing the key section plus 80ms slow replay still does not
+  render, so the raw direct-replay route is closed (the tool stays); in raw mode mux stays
+  suspended so the bridge does not disconnect on its own. `e2e-real-queued-order.sh` now records
+  the full `/global/event` trace starting before the first prompt, and the real model reproduced
+  the wire precondition three times in a row.
+- Official minimal-server attribution harness: `scripts/minimal-oc-server.mjs` uses bridge
+  components plus a scripted event sequence (no dsh, no real model) to provide the full
+  OpenCode-compatible surface, and `scripts/e2e-minimal-server-repro.sh` drives the official
+  1.18.18 TUI attach and analyzes the queued/follow-up text order frame by frame; on the first run
+  the official TUI rendered in the correct order (follow-up text above the queued card). The
+  bridge gains a `src/bridge/router-entry.ts` build entry exporting
+  `createBridgeRouter`/`startBridgeServer` for the harness.
+- Real-model queued misordering repro `scripts/e2e-real-queued-order.sh` (manual, real DeepSeek
+  API): queue a second prompt from the keyboard right after the tool completes, record bridge SSE
+  timing evidence (whether the follow-up text delta arrives after the queued user event) and the
+  streaming panel frames; two consecutive runs gave `wire_follow_after_queued=1`, with the reply
+  content rendered below the queued card in 45/50 panel frames. It also fixes the
+  `DSH_OC_REAL_KEEP_RUN=1` cleanup logic in e2e-real-llm/e2e-real-queued-order (previously
+  inverted, deleting on keep).
+- Candidate opencode upgrade lane `scripts/upgrade-lane.sh`: run the golden scenario against a
+  candidate binary and semantically diff the normalized SSE trace against the 1.18.18 baseline
+  (`--bin`/`--out`), with zero diff on the same version; the version-check bypass
+  `DSH_OC_BYPASS_VERSION_CHECK=1` applies only to lane scenarios, and the production path still
+  enforces a matching version.
+- Misordering repro record `scripts/e2e-queued-order-repro.sh`: queue a second prompt from the
+  keyboard during tool + slow-stream follow-up text, capture the official TUI panel order frame by
+  frame (transient misordering detection), and freeze a second 1.18.18 golden SSE baseline
+  `tests/fixtures/golden/queued-followup-1.18.18.sse.jsonl`; consecutive mock-driven runs observed
+  no transient misordering, recorded as renderer/bridge attribution evidence.
+- 1.18.18 golden SSE trace baseline: `scripts/e2e-golden-trace.sh` runs the "tool + follow-up
+  text" scenario on the real TUI and records the trace with an observer SSE,
+  `scripts/normalize-golden-trace.mjs` normalizes it (random ids, absolute times and machine paths
+  removed), and the baseline is committed to `tests/fixtures/golden/`; repeated runs are
+  structurally identical, it is in the stable suite, and it serves semantic diffing for future
+  vendor upgrades.
+- Minimal permission e2e `scripts/e2e-tui-permission-mini.sh`: a single Allow-once cycle on the
+  real TUI (dialog → approve → tool completes → exactly one reply → no leftover permission),
+  10–11s; it is in the stable suite, and the flake scan is 10/10 green.
+- Second flake scan round: `e2e-tui-queue-live.sh` and `e2e-tui-agent-tab.sh` 10 first runs each,
+  all green (the two scripts that flaked occasionally in CI), results in
+  docs/perf/results-flake-tui-2026-08-17.md.
+- Real-session feature coverage scan `scripts/replay-corpus-manifest.mjs`: it outputs only event
+  type/feature counts and never touches real content; all 12 features across 64 real sessions are
+  covered by the synthetic corpus (long-session is covered by runtime generation in the spec),
+  report in docs/perf/coverage-real-sessions-2026-08-17.md.
+- Deterministic replay corpus (experiment 1c): `scripts/build-replay-corpus.mjs` generates 10
+  structure-preserving synthetic fixtures (reasoning, single/multiple tools, queued, tool error,
+  compaction, interrupt, goal, plugin-context, session-title, unfinished-turn) into
+  `tests/fixtures/replay/`; `tests/replay-corpus.spec.ts` audits the replay: no unhandled or
+  translation errors, tool calls paired and terminal, live completion state consistent with
+  durable, durable v1/v2 message surfaces consistent, and a 10k-event long session at runtime.
+- Budgeted flake scan `scripts/flake-mini-scan.sh`: repeat the minimal high-risk e2e scripts N
+  times (default 10), record the first failure and the duration, stop immediately on a semantic
+  failure without retrying; the three recovery fault domains are green in their first 10 runs each
+  (results in docs/perf).
+- The recovery oracle gains crash semantics: `recovery_assert_crash_prefix` accepts a restart graph
+  that is a complete message prefix of the observed graph, or, at equal length, a last text part
+  that is a prefix of the observed text (a SIGKILL landing inside the last chunk's write boundary
+  is normal crash consistency, not data loss).
+- Release artifact audit `scripts/verify-release-artifacts.sh` (part of the `check-all` gate):
+  clean-rebuild from HEAD sources and assert zero diff against the committed `lib/`; scan the npm
+  pack for machine absolute paths; print the package version, tarball sha256 and package-tree
+  hash.
+- Install/upgrade/rollback drill `scripts/e2e-install-rollback.sh` (manual): cold-install the
+  candidate from a remote GitHub full SHA and run a real TUI smoke, roll back to the previous spec
+  and re-run, and probe re-add behavior within the same profile; before a version bump, in-place
+  results only validate the command path.
+- Recovery fault-domain e2e matrix:
+  - `scripts/e2e-recovery-crash.sh`: SIGKILL dsh in the middle of a slow stream, restart with
+    `--session` and assert the persisted prefix is exactly-once (nothing lost, no fabricated
+    completion), the session returns to idle (explicitly cancelling the in-flight turn when
+    needed), and a new prompt can continue (20s).
+  - `scripts/e2e-recovery-sse-reconnect.sh`: an observer SSE stream breaks and reconnects; assert
+    events keep arriving after the reconnect and the final v1/v2 message graph is exactly-once
+    (13s).
+  - mux resubscribe unit test: replayed text-chunks across a translator rebuild are deduplicated by
+    the connection-level replay guard, so deltas are not sent twice.
+- Recovery assertion helpers converge into `tests/e2e/recovery-lib.sh` (v1/v2 signatures,
+  authoritative idle, prefix/full equality comparison), and `e2e-recovery-consistency.sh` reuses
+  the same oracle.
+- `GET /api/session/{id}/history`: SDK v2 history endpoint (`limit` + `after` event seq cursor),
+  returning `{ data: SessionMessage[], hasMore, next }`; `after` is an exclusive upper bound (dsh
+  native `beforeSeq`, paging backwards) and single-page latency is bounded; the v2 message
+  conversion gains a message anchor seq, and a negative `after` returns 400.
+- Background subagent capability enabled: `GET /experimental/capabilities` returns
+  `{ backgroundSubagents: true }`, and `POST /experimental/session/{id}/background` is added as a
+  no-op success route (dsh sessions live in the server, and the `subagent` tool runs in the
+  background by default).
+- `GET /session/{id}/children`: returns the subagent child sessions by `parentSessionId`, paired
+  with the background subagent capability for TUI subagent tree queries.
+- `GET /experimental/session`: GlobalSession list (search/directory filter/limit subset
+  supported), completing the experimental session list surface.
+- `POST /session/{id}/init`: no-op success `true` (a dsh session is initialized when created).
+- `GET /session/{id}/message/{messageID}`: single message query (reuses the v1 conversion, 404 when
+  not found).
+- `POST /session/{id}/permissions/{permissionID}`: SDK v2 permission reply alias (body uses the
+  `response` field), mapped to the same `permissionReply`.
+- `GET /api/health`: returns `{ healthy: true }` for client liveness checks.
+- `GET /api/session/active`: returns the current active session
+  (`{ data: { [sessionId]: { type: "running" } } }`).
+- `POST /api/session/{id}/wait`: bounded polling wait for the session to go idle (≤30s, 204 when
+  idle).
+- `GET /api/session/{id}/context`: returns `{ data: SessionMessage[] }` (reuses the v2 message
+  conversion).
+- `GET /api/session/{id}/event`: SSE event stream filtered by session (a subset of
+  `/global/event`).
+- `GET /api/session/{id}/message/{messageID}`: v2 single message query
+  (`{ data: SessionMessage }`).
+- `GET /api/provider/{id}`: single provider query (`{ location, data: ProviderV2Info }`).
+- SDK v2 permission surface completed: `GET /api/permission/request`, `GET /api/question/request`
+  (global pending lists, `{ location, data }`), `GET /api/session/{id}/permission/{rid}` (single
+  query, 404 when the session does not match), `DELETE /api/permission/saved/{id}` (delete an
+  in-memory `sessionID:toolName` grant); `GET /api/permission/saved` output aligns with the SDK
+  `PermissionSavedInfo` (`projectID/action/resource`, keeping `sessionID/grantedAt`).
+- Real VCS surface: `GET /vcs`, `GET /vcs/status`, `GET /vcs/diff`, `GET /vcs/diff/raw` upgrade
+  from stubs to real git reads (current branch, origin default branch, staged+unstaged file status
+  and line counts, per-file and raw unified diff; untracked files do not enter status).
+- Workspace filesystem surface: `GET /api/fs/read/{path}` (raw bytes, 400 for out-of-range paths,
+  5 MiB per-file limit), `GET /api/fs/list`, `GET /api/fs/find` (recursive search, skipping
+  dependency/build directories and limiting the result count); route matching gains trailing `*`
+  wildcard support.
+- Lifecycle surface: `GET /global/health` (`{ healthy: true, version }`), `POST /global/dispose`
+  and `POST /instance/dispose` (no-op acknowledgements; the process is managed by dsh).
+- Real title backfill for the session list: dsh `session.list` does not return a title projection,
+  so the bridge backfills from the history tail projection per session and caches it (full sync
+  for ≤40; larger lists do not block, a background low-concurrency job backfills the most recent
+  24 with concurrency 2), and restored old sessions are also recognized correctly in the exit
+  note.
+- Esc interrupt/cancel: `turn.wait` / `turn.idle` events drive the TUI running state; two
+  consecutive Esc presses in the full TUI and one Esc in `--mini` call `session.cancel` to stop
+  the in-flight stream.
+- `/preset` inheritance for new sessions: the most recently selected agent preset applies to
+  sessions created by later `/new`; after a switch, `session.updated` is broadcast carrying the
+  new agent.
+- Exit note: the official opencode exit splash (full/`--mini`) cannot be replaced, so dsh-oc prints
+  one explanatory line below it when the session has content (the session id belongs to dsh;
+  resume with `dsh --profile oc --session <id>`); `DSH_OC_DISABLE_EXIT_NOTE=1` turns it off.
 
-### 工程化
+### Engineering
 
-- CI e2e 每个脚本带 `timeout -k` 执行（默认 300s，`E2E_TIMEOUT` 可覆盖），
-  挂死套件快速失败并重试一次，不再拖住整个 job。
-- CI 失败工件改为打包上传（排除 `node_modules` 与 `work/.git`），上传步骤
-  限时 5 分钟，避免 `.e2e` 上传挂起数小时。
-- `scripts/cleanup-merged-branches.sh` 现在同时枚举本地与远端已合并分支
-  （dry-run 即可列出 `origin/feat-*`、`origin/chore-*` 遗留），
-  `--apply --remote` 可一键清理。
-- `CONTRIBUTING.md`、PR/Issue 模板、分支策略（main 发布 / develop 集成 /
-  短生命周期功能分支）。
-- CI：push 到 `main`/`develop`/`feat-*`/`fix-*`/`docs-*`/`perf-*`/`test-*`/
-  `chore-*` 自动跑稳定 e2e 套件（`CI_E2E_SUBSET=1`）；手动触发全量 e2e + 压测。
-- M5 重构：路由注册从 `router.ts` 抽出，并按域拆分为
-  `src/bridge/routes/{boot,session-v1,session-v2,permission}.ts`；
-  协议探针自动扫描路由目录。
-- `scripts/cleanup-merged-branches.sh`：列出/删除已并入 main 的遗留分支
-  （默认 dry-run，`--apply` 本地删除，`--remote` 同步删除远端）。
-- `scripts/cleanup-e2e-runs.sh`：清理 `.e2e` 下旧的 e2e run 目录
-  （默认 dry-run，`--keep N` 保留最近 N 个，`--apply` 删除；测试产物可再生）。
-- `pnpm run e2e` / `pnpm run e2e:api`：一键跑全量或 API 子集 e2e。
-- `scripts/e2e-tui-permission.sh`：真实 TUI 权限/提问 e2e（workspace-write +
-  mock LLM 升级工具调用），覆盖 Allow once、Allow always + 会话内自动放行、
-  Reject（错误回传且不落盘）、`ask_user_question` 选项对话框，以及
-  `--mini` 模式下的 once/always+自动放行/reject/question 与单次回复渲染。
-- `scripts/e2e-api-permission.sh`：API 权限 e2e 补全（v1 once 不落授权、
-  v2 always/别名 reject、保存授权不跨会话泄漏、删除后重新询问、question
-  第二选项回复与 v2 reject、400/404 错误分支）。
-- `scripts/e2e-tui-permission-ext.sh`：TUI 键盘面扩展（question 选项 Down
-  高亮移动、question Esc 取消、permission Esc=reject：standard 直接拒绝、
-  `--mini` 先弹确认层）。
-- `scripts/e2e-tui-mini.sh`：`--mini` 优雅退出（三连 Ctrl+C）后断言 dsh-oc
-  退出提示可见。
-- `scripts/e2e-tui-continue.sh`：种子会话带显式标题，`--continue` 恢复后断言
-  会话列表返回真实标题（历史“恢复会话无标题”回归项）。
-- `scripts/perf.mjs` 新增 `measurements.titleCoverage`：量化列表真实标题覆盖率。
-- `e2e-tui-abort.sh`：mini 分支改为等 SSE 出现真实流式增量后再按 Esc，断言确实
-  打断进行中的流（长 mock 开启 `repeatLast`，修复此前第二次请求被 500 拒绝的假通过）。
-- `e2e-tui-queue.sh`：权限弹窗阻塞第一轮时发送第二条 prompt，断言 TUI 显示
-  QUEUED，批准后第二条按序处理。
-- `e2e-tui-queue-live.sh`：慢流进行中从 TUI 键盘发送第二条 prompt，断言 QUEUED
-  显示后打断并干净退出（“模型运行中无法发送新消息”回归项）。
-- `e2e-tui-agent-tab.sh`：Tab 切换 agent 后随 prompt 生效，dsh 会话 preset
-  真实切换（build → standard）。
-- `e2e-tui-abort.sh` 追加 spinner 停止断言：打断后两次捕获不得出现变化的
-  spinner 帧（“打断后 thinking 一直转圈”回归项）。
-- `scripts/e2e-real-llm.sh`：本地真实 LLM 全流程回归（headless 文本+工具、
-  FIFO 队列顺序、`/goal` 创建、variant 保留、TUI sidebar 与发送、干净退出；
-  仅本地手动运行，消耗真实 token）。
-- README 按评审精简：能力状态前置、移除 cast 录制细节（保留在 AGENTS.md）、
-  二进制说明只保留“官方二进制”，补充更新命令与 npm 包名说明。
-- README 演示改为真实模型录制的 GIF：asciinema cast（`docs/demo/`）经官方
-  `agg` 渲染成 GIF 嵌入 README（GitHub 不执行 `<script>`，无法用播放器脚本），
-  cast 保留供 `asciinema play` 交互回放；录制用真实 DeepSeek 模型完成真实任务，
-  不用 mock。
-- 报错显示：dsh `host/agent-error` 现在除了 `session.error` 还会广播一条可见的
-  assistant 文本消息（`[错误] …`），TUI 对话区能直接看到错误，不再静默或渲染异常。
-- 排队消息可见：dsh pending inbox（`session/queue` 初始化 +
-  `agent/inbox/spliced` 增量）映射为 opencode 用户消息，TUI 显示 QUEUED；
-  同时移除 300ms 相同文本防抖（掩盖“排队无反馈→用户重发”的根因）。
-- `tool-call-chunks` 历史回放：dsh 持久化主流编码（真实会话 701 vs 39 条
-  live delta）经共享 feed 管线恢复流式工具参数。
-- slash 命令队列提示：`/goal`、`/preset`、`/help` 执行时若队列还有待处理
-  用户消息，结果末尾追加“队列中还有 N 条消息待处理”。
-- 已知日志型会话事件（`step/start`、`request/header|context`、
-  `session/title-llm-request`、`permission/preset`、`sandbox/mode`、
-  `approval/policy`、`command/run|done`）显式静默，真正未知类型仍打日志。
-- 顶级模型 round-0002 审阅（gpt-5.6-sol / max）：确认 rc.2 为条件性
-  NO-GO，恢复一致性主证据需从 warm/cold history 投影升级为 v1+v2 双面
-  oracle；`--continue` 消息图变体延后，优先三故障域（SSE 断线、mux 重订阅、
-  进程崩溃）与 full SHA 不可变安装/升级/回滚演练；错序归因措辞降为中性
-  已知限制，待官方 1.18.18 最小复现。
+- CI e2e runs each script under `timeout -k` (default 300s, `E2E_TIMEOUT` overrides); a hung suite
+  fails fast and retries once instead of holding the whole job.
+- CI failure artifacts are uploaded as a bundle (excluding `node_modules` and `work/.git`), with a
+  5-minute limit on the upload step, so `.e2e` uploads do not hang for hours.
+- `scripts/cleanup-merged-branches.sh` now enumerates both local and remote merged branches (a dry
+  run lists leftovers such as `origin/feat-*`, `origin/chore-*`), and `--apply --remote` cleans
+  them in one go.
+- `CONTRIBUTING.md`, PR/Issue templates and the branch strategy (main releases / develop integrates
+  / short-lived feature branches).
+- CI: pushes to `main`/`develop`/`feat-*`/`fix-*`/`docs-*`/`perf-*`/`test-*`/`chore-*` run the
+  stable e2e suite automatically (`CI_E2E_SUBSET=1`); manual runs do the full e2e + stress test.
+- M5 refactor: route registration is extracted from `router.ts` and split by domain into
+  `src/bridge/routes/{boot,session-v1,session-v2,permission}.ts`; the protocol probe scans the
+  route directory automatically.
+- `scripts/cleanup-merged-branches.sh`: list/delete leftover branches already merged into main
+  (dry run by default, `--apply` deletes locally, `--remote` also deletes on the remote).
+- `scripts/cleanup-e2e-runs.sh`: clean old e2e run directories under `.e2e` (dry run by default,
+  `--keep N` keeps the most recent N, `--apply` deletes; test artifacts are regenerable).
+- `pnpm run e2e` / `pnpm run e2e:api`: run the full or the API-subset e2e in one command.
+- `scripts/e2e-tui-permission.sh`: real TUI permission/question e2e (workspace-write + mock LLM
+  escalating a tool call), covering Allow once, Allow always + automatic allowance within the
+  session, Reject (error returned and nothing persisted), the `ask_user_question` option dialog,
+  and once/always+auto-allow/reject/question plus single-reply rendering in `--mini` mode.
+- `scripts/e2e-api-permission.sh`: API permission e2e completion (v1 once does not persist a
+  grant, v2 always/alias reject, a saved grant does not leak across sessions, re-ask after
+  deletion, question second-option reply and v2 reject, 400/404 error branches).
+- `scripts/e2e-tui-permission-ext.sh`: TUI keyboard surface extensions (question option highlight
+  moves on Down, question cancels on Esc, permission Esc=reject: direct reject in standard, a
+  confirmation layer first in `--mini`).
+- `scripts/e2e-tui-mini.sh`: after a graceful `--mini` exit (three Ctrl+C), assert the dsh-oc exit
+  note is visible.
+- `scripts/e2e-tui-continue.sh`: the seeded session carries an explicit title; after `--continue`
+  restores it, assert the session list returns the real title (the historical "restored session
+  has no title" regression item).
+- `scripts/perf.mjs` adds `measurements.titleCoverage`: quantifies the real-title coverage of the
+  list.
+- `e2e-tui-abort.sh`: the mini branch now waits for a real streaming increment in SSE before
+  pressing Esc, asserting the in-flight stream is actually interrupted (the long mock enables
+  `repeatLast`, fixing the earlier false pass where the second request was rejected with 500).
+- `e2e-tui-queue.sh`: send a second prompt while a permission dialog blocks the first turn, assert
+  the TUI shows QUEUED, and that the second prompt is processed in order after approval.
+- `e2e-tui-queue-live.sh`: send a second prompt from the TUI keyboard during a slow stream, assert
+  QUEUED appears, then interrupt and exit cleanly (the "cannot send a new message while the model
+  runs" regression item).
+- `e2e-tui-agent-tab.sh`: after switching agent with Tab, it takes effect with the prompt and the
+  dsh session preset really switches (build → standard).
+- `e2e-tui-abort.sh` adds a spinner-stop assertion: after an interrupt, two captures must not show
+  a changing spinner frame (the "thinking keeps spinning after interrupt" regression item).
+- `scripts/e2e-real-llm.sh`: local full-flow real-LLM regression (headless text+tool, FIFO queue
+  order, `/goal` creation, variant preservation, TUI sidebar and send, clean exit; local manual
+  runs only, consumes real tokens).
+- README trimmed per review: capability status moved up front, cast recording details removed
+  (kept in AGENTS.md), binary notes reduced to "official binary", update commands and the npm
+  package name explained.
+- The README demo becomes a GIF recorded with a real model: an asciinema cast (`docs/demo/`)
+  rendered to GIF with the official `agg` and embedded in the README (GitHub does not execute
+  `<script>`, so a player script is not an option), with the cast kept for interactive
+  `asciinema play` replay; the recording uses a real DeepSeek model on a real task, not a mock.
+- Error display: dsh `host/agent-error` now broadcasts a visible assistant text message with an
+  error prefix in addition to `session.error`, so the TUI conversation area shows the error
+  directly instead of staying silent or rendering abnormally.
+- Queued messages visible: the dsh pending inbox (`session/queue` initialization +
+  `agent/inbox/spliced` increments) maps to opencode user messages, so the TUI shows QUEUED; the
+  300ms same-text debounce is removed (it masked the root cause of "no queued feedback → user
+  resends").
+- `tool-call-chunks` history replay: the dsh persisted main-stream encoding (701 vs 39 live deltas
+  in a real session) restores streaming tool arguments through the shared feed pipeline.
+- Slash command queue notice: when `/goal`, `/preset` or `/help` runs while user messages are
+  still queued, the result ends with a note that N messages are still queued for processing.
+- Known log-type session events (`step/start`, `request/header|context`,
+  `session/title-llm-request`, `permission/preset`, `sandbox/mode`, `approval/policy`,
+  `command/run|done`) are explicitly silenced, while genuinely unknown types still log.
+- Top-level model round-0002 review (gpt-5.6-sol / max): confirms rc.2 as a conditional NO-GO; the
+  primary recovery-consistency evidence must upgrade from the warm/cold history projection to a
+  v1+v2 two-sided oracle; the `--continue` message-graph variant is deferred, prioritizing the
+  three fault domains (SSE disconnect, mux resubscribe, process crash) and the full-SHA immutable
+  install/upgrade/rollback drill; the misordering attribution wording is downgraded to a neutral
+  known limitation pending an official 1.18.18 minimal repro.
 
-### 修复
+### Fixed
 
-- 同一回合存在多个含 tool-call 的 assistant 消息时，turn/end 现在为**每个**
-  工具消息补发 completed（此前 pending 完成态是单槽，只有最后一个工具
-  消息收到 completed，前面的工具卡在 live 视图缺少完成态；语料审计首跑
-  发现并修复，新增多工具完成态单测）。
-- v1 历史消息的 `parentID` 现在随桥接 surface id 一起 remap：此前 warm
-  进程内父链仍指向原始 dsh id，消息 id 却已换成桥接 id，导致客户端无法在
-  返回列表内解析父链（cold `--session` 无映射反而能解析）；修复后 warm/cold
-  v1 图在规范化索引下一致。
-- `e2e-recovery-consistency.sh` 升级为恢复一致性双面 oracle：等待权威
-  idle（`POST /api/session/:id/wait`）代替固定 sleep；同时比较 v1（父链/
-  part 归属）与 v2（逐消息 parts，用户文本并入）；工具 part 纳入
-  `name/status/output`，并断言至少一个 completed 工具输出与父链全部可解析
-  （不再是无父链空断言）。
-- 首条回复不再重复渲染：dsh 注入的插件上下文消息（`Current runtime
-  context`）不再覆盖“父锚点”，助手消息始终使用为该 prompt 注册的桥接 id，
-  与历史接口 id 一致，TUI 只渲染一次。
-- 对话前 Tab / `/preset` 切换 preset 后，TUI 侧边栏 agent 标签不再回退：
-  bridge 按会话跟踪真实 agent，并贯穿用户消息、助手消息、`session.updated`
-  与 v1/v2 历史；prompt 回显在 agent 应用后再广播；助手消息补齐官方运行时
-  的 `agent` 字段。
-- 流式错误在侧边栏显示可读文本：`session.error` 按官方判别联合
-  （`UnknownError` / `MessageAbortedError` / `ProviderAuthError`）发出，
-  不再渲染成 `[object Object]`。
-- v1/v2 历史按桥接 id 合并同回合的工具调用与后续文本为单条消息，与实时
-  SSE 一致（此前历史返回两条同 id 消息，TUI 合并后会把工具卡/文本重复
-  渲染）；“工具+排队”即时视图错序为官方 TUI 1.18.18 中观察到的显示限制
-  （bridge 持久数据正确，`--session` 重新进入顺序正确；具体归因待官方
-  最小复现实验闭合）。
-- `turn/end` 跳过已定稿消息的 pending 完成时同时删除记录，避免残留到下一
-  回合补发重复的 `message.updated`。
-- `/api/session/active` 只在会话实际 `running` 时返回该会话，空闲/不存在时返回
-  `{ data: {} }`（此前无条件标记为 running）。
-- 文档化 SSE 文本 delta 成对重复的已知行为（dsh 双编码 + mux 重放；TUI 以
-  `message.updated` 全量文本渲染，实测不受影响）。
-- Thought（reasoning）时长：`end` 改为最后一条 reasoning chunk 的时间，不再错误地
-  等于整条回复的完成时间（历史读取与实时流均生效）。
-- 打断/流式转圈：text 块开始时立即关闭 reasoning part（带 end 时间）；中断
-  （无最终 assistant/message）时 turn/end 也会关闭仍打开的 reasoning part，
-  TUI 的 thinking 指示不再一直转圈。
-- Tab/agent 选择随 prompt 生效：v1/v2 全部 prompt 路由现在会应用请求体里的
-  `agent`；dsh 对已产生回复的会话锁定 agent preset（409），此时第一条消息后
-  会在 TUI 显示一次“Agent switch locked”提示，不再静默失效。
-- 含未完成工具调用的 assistant 消息不再提前标记 `completed`，`step/end` /
-  `turn/end` 时补发，官方 TUI 的 QUEUED 判定（最后一个未完成 assistant 之后
-  的用户消息）正确生效。
+- When a turn has multiple assistant messages containing tool calls, turn/end now sends completed
+  for **every** tool message (the pending completion state was a single slot, so only the last
+  tool message got completed and earlier tool cards lacked a completion state in the live view;
+  the corpus audit found this on its first run, and a multi-tool completion unit test is added).
+- The v1 history message `parentID` is now remapped together with the bridge surface id:
+  previously, inside a warm process the parent chain still pointed at the original dsh id while
+  message ids had already switched to bridge ids, so clients could not resolve the parent chain
+  within the returned list (a cold `--session` with no mapping could resolve it); after the fix the
+  warm/cold v1 graphs agree under the normalized index.
+- `e2e-recovery-consistency.sh` upgrades to a two-sided recovery-consistency oracle: wait for
+  authoritative idle (`POST /api/session/:id/wait`) instead of a fixed sleep; compare both v1
+  (parent chain/part ownership) and v2 (per-message parts, user text merged in); tool parts
+  include `name/status/output`, and it asserts at least one completed tool output and that the
+  whole parent chain resolves (no more empty assertions without a parent chain).
+- The first reply is no longer rendered twice: the plugin context message dsh injects
+  (`Current runtime context`) no longer overwrites the "parent anchor", and assistant messages
+  always use the bridge id registered for that prompt, matching the history endpoint id, so the
+  TUI renders once.
+- After switching preset with Tab / `/preset` before the conversation, the TUI sidebar agent label
+  no longer falls back: the bridge tracks the real agent per session and carries it through user
+  messages, assistant messages, `session.updated` and v1/v2 history; the prompt echo is broadcast
+  after the agent is applied; assistant messages gain the official runtime's `agent` field.
+- Streaming errors show readable text in the sidebar: `session.error` is emitted per the official
+  discriminated union (`UnknownError` / `MessageAbortedError` / `ProviderAuthError`) instead of
+  rendering as `[object Object]`.
+- v1/v2 history merges the tool call and the following text of the same turn into a single message
+  by bridge id, consistent with live SSE (previously history returned two messages with the same
+  id, and after TUI merging the tool card/text were rendered twice); the immediate "tool + queued"
+  view misordering is a display limitation observed in the official TUI 1.18.18 (the bridge's
+  persisted data is correct and re-entering with `--session` has the right order; the exact
+  attribution awaits the official minimal repro experiment).
+- `turn/end` now also deletes the record when skipping pending completion for a finalized message,
+  so nothing lingers into the next turn and re-sends a duplicate `message.updated`.
+- `/api/session/active` returns the session only when it is actually `running`, and `{ data: {} }`
+  when idle or missing (previously it was marked running unconditionally).
+- Document the known behavior of paired duplicate SSE text deltas (dsh double encoding + mux
+  replay; the TUI renders full text from `message.updated` and is unaffected in practice).
+- Thought (reasoning) duration: `end` now uses the timestamp of the last reasoning chunk instead of
+  wrongly equalling the completion time of the whole reply (applies to history reads and the live
+  stream).
+- Interrupt/streaming spinner: the reasoning part is closed immediately when a text block starts
+  (with an end time); on interrupt (no final assistant/message) turn/end also closes a still-open
+  reasoning part, so the TUI thinking indicator no longer spins forever.
+- Tab/agent selection takes effect with the prompt: all v1/v2 prompt routes now apply the `agent`
+  in the request body; dsh locks the agent preset for a session that already produced a reply
+  (409), in which case an "Agent switch locked" notice is shown once in the TUI after the first
+  message instead of failing silently.
+- Assistant messages with unfinished tool calls are no longer marked `completed` early; completion
+  is sent at `step/end` / `turn/end`, so the official TUI's QUEUED determination (a user message
+  after the last unfinished assistant) works correctly.
 
 ## [0.1.0-rc.1] - 2026-08-15
 
-### 新增
+### Added
 
-- 基于 OpenCode 1.18.18 的 HTTP/SSE bridge 与真实 TUI attach。
-- DSH OC 品牌启动 logo（替换 OpenCode 字符画）。
-- 自动更新关闭与二进制版本锁定 1.18.18。
-- 流式 toolcall/progress、Goal 完整生命周期、dsh 模型目录/preset 切换。
-- 文本/图片附件、`Always` 权限会话内存记忆、skills 目录与斜杠命令。
-- v2 会话搜索/分页/排序、`--dir` 目录过滤。
-- SSE mux/host 重连与重放去重、todo/goal 跨重连状态保留。
-- 会话性能压测（200/1000/5000/10000）与协议升级探针。
-- 一键自测 `scripts/check-all.sh` 与 GitHub Actions CI。
+- HTTP/SSE bridge and real TUI attach based on OpenCode 1.18.18.
+- DSH OC branding startup logo (replacing the OpenCode ASCII art).
+- Automatic updates disabled and the binary version pinned to 1.18.18.
+- Streaming toolcall/progress, the full Goal lifecycle, dsh model catalog/preset switching.
+- Text/image attachments, in-memory `Always` permission memory for the session, skills directory
+  and slash commands.
+- v2 session search/pagination/sorting, `--dir` directory filtering.
+- SSE mux/host reconnect with replay dedup, todo/goal state preserved across reconnects.
+- Session performance stress tests (200/1000/5000/10000) and the protocol upgrade probe.
+- One-command self-test `scripts/check-all.sh` and GitHub Actions CI.
 
-### 修复
+### Fixed
 
-- `--mini` 无回复（补 `POST /session/:id/prompt_async`）。
-- `--mini` 回复渲染两次（流式/最终 part id 复用）。
-- 会话历史列表无标题（持久标题 → 项目目录 basename → session id 回退）。
-- 旧包名迁移导致 `duplicate loader entry id: storage`（清理 profile 中残留的
-  `@deepseek-ai/dsh-oc` 依赖与 bundle 项即可恢复）。
+- `--mini` no reply (added `POST /session/:id/prompt_async`).
+- `--mini` reply rendered twice (streaming/final part id reuse).
+- Session history list has no title (persisted title → project directory basename → session id
+  fallback).
+- The old package name migration caused `duplicate loader entry id: storage` (removing the leftover
+  `@deepseek-ai/dsh-oc` dependency and bundle entry from the profile restores it).
 
-### 重构
+### Refactored
 
-- 包名从 `@deepseek-ai/dsh-oc` 迁移到 `@chiro2001/dsh-oc`。
-- 路由注册从 `router.ts` 抽出到 `src/bridge/routes.ts`。
+- Package name migrated from `@deepseek-ai/dsh-oc` to `@chiro2001/dsh-oc`.
+- Route registration extracted from `router.ts` to `src/bridge/routes.ts`.
