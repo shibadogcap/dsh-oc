@@ -997,8 +997,16 @@ export async function integrationsForClients(ctx: BridgeRouteContext): Promise<C
     id: `dsh-profile-${group.id}`,
     name: `${group.name} (dsh profile)`,
     metadata: { source: 'dsh-profile', provider: group.id },
+    // No connect method: there is nothing to add from this dialog. The
+    // credential connection keeps the row visible (the dialog hides disabled
+    // rows) and its label says where the credential lives.
     methods: [],
-    connections: [{ type: 'env', name: 'DSH_PROFILE' }],
+    connections: [{
+      type: 'credential',
+      id: `dsh-profile-${group.id}`,
+      label: 'dsh profile',
+      method: 'key',
+    }],
   }))
 }
 

@@ -209,7 +209,7 @@ If the Agent already has a turn/maintenance, the endpoint returns 409; if the se
 | `GET /api/project/{projectID}` | MAP | bare `Project`; id mismatch 404 |
 | `PATCH /api/project/{projectID}` | MAP | bare `Project` (currently only echoes back, no persistence); id mismatch 404 |
 | `GET /api/agent` | STUB/LATER | `[]` |
-| `GET /api/integration` | MAP | one entry per provider with a usable credential (`methods: []`, an env connection); a hint entry when none, so the dialog can explain the profile |
+| `GET /api/integration` | MAP | one entry per provider with a usable credential (`methods: []`, a credential connection labelled `dsh profile`; the label is what keeps the row visible); a hint entry when none, so the dialog can explain the profile |
 | `POST /api/integration/{id}/connect/*` | REJECT | 400 `integration/profile-configured`: credentials live in the dsh profile |
 | `GET /api/vcs` | MAP | `{ provider: "git", branch: { current, default } }`, `null` outside a worktree |
 | `GET /api/vcs/base` | MAP | merge base with the default branch (`source: "default"`), first commit otherwise |

@@ -209,7 +209,7 @@ compaction，dsh 可能摘要或丢弃逐字原文，因此不保证压缩后仍
 | `GET /api/project/{projectID}` | MAP | 裸 `Project`；id 不匹配 404 |
 | `PATCH /api/project/{projectID}` | MAP | 裸 `Project`（当前只回显，不落盘）；id 不匹配 404 |
 | `GET /api/agent` | STUB/LATER | `[]` |
-| `GET /api/integration` | MAP | 每个有可用凭据的 provider 一条（`methods: []` 与 env 连接）；一个都没有时返回一条说明 profile 的提示 |
+| `GET /api/integration` | MAP | 每个有可用凭据的 provider 一条（`methods: []` 与标为 `dsh profile` 的 credential 连接，这条连接让该行可见）；一个都没有时返回一条说明 profile 的提示 |
 | `POST /api/integration/{id}/connect/*` | REJECT | 400 `integration/profile-configured`，凭据在 dsh profile 中 |
 | `GET /api/vcs` | MAP | `{ provider: "git", branch: { current, default } }`；不在 worktree 内为 `null` |
 | `GET /api/vcs/base` | MAP | 与默认分支的 merge base（`source: "default"`），否则用首个 commit |

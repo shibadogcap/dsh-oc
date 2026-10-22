@@ -50,7 +50,7 @@ describe('bridge: integrations', () => {
         id: string
         name: string
         methods: unknown[]
-        connections: Array<{ type: string; name: string }>
+        connections: Array<{ type: string; label?: string; name?: string }>
       }>
     }
     expect(body.data).toHaveLength(1)
@@ -61,7 +61,11 @@ describe('bridge: integrations', () => {
     })
     // `hasConnectedProvider` reads this length; an empty list keeps the
     // sidebar onboarding visible next to a working model.
-    expect(body.data[0]?.connections).toEqual([{ type: 'env', name: 'DSH_PROFILE' }])
+    // The dialog hides rows whose methods and credential connections are both
+    // empty, so the connection is what keeps this row visible.
+    expect(body.data[0]?.connections).toEqual([
+      { type: 'credential', id: 'dsh-profile-opencode-go', label: 'dsh profile', method: 'key' },
+    ])
   })
 
   it('publishes a hint instead of an empty list when no provider has a credential', async () => {

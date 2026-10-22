@@ -18,7 +18,6 @@ import { externalProviderId } from '../convert/common.js'
 import { applyShell, availableShells, readServerConfig, serverConfigPath } from '../config-store.js'
 import { convertToV2Models } from '../convert/model.js'
 import {
-  emptyCredentialEntry,
   emptyIntegrationInfo,
   emptyPersistentPtyInfo,
   emptySessionInfo,
@@ -156,20 +155,23 @@ export function registerV2StubRoutes(register: RouteRegistrar): void {
   register('GET', '/api/mcp/resource', 'json', async () => R.json(200, { location: {}, data: { resources: [], templates: [] } }))
 
   // credential — the 2.1.0 client unwraps `{ data }`
+  // dsh keeps credentials in its own store, so writing one here would change
+  // nothing. Refuse instead of reporting a success the UI would believe.
+  const credentialProfileOnly = (ctx: Pick<BridgeRouteContext, 'log'>, route: string): never => {
+    const message = 'Credentials are managed by dsh, not by the bridge; '
+      + "set the provider's API key in the dsh profile and restart dsh."
+    logStub(ctx, route, message)
+    throw badRequest(message, { code: 'credential/profile-configured' })
+  }
   register('GET', '/api/credential', 'json', async () => R.json(200, { data: [] }))
-  register('POST', '/api/credential', 'json', async () => R.json(200, { data: emptyCredentialEntry('') }))
-  register('PATCH', '/api/credential/:id', 'json', async (_req, ctx) => {
-    logStub(ctx, 'PATCH /api/credential/:id', 'dsh has no credential store')
-    return R.json(204)
-  })
-  register('POST', '/api/credential/:id/activate', 'json', async (_req, ctx) => {
-    logStub(ctx, 'POST /api/credential/:id/activate', 'dsh has no credential store')
-    return R.json(204)
-  })
-  register('DELETE', '/api/credential/:id', 'json', async (_req, ctx) => {
-    logStub(ctx, 'DELETE /api/credential/:id', 'dsh has no credential store')
-    return R.json(204)
-  })
+  register('POST', '/api/credential', 'json', async (_req, ctx) =>
+    credentialProfileOnly(ctx, 'POST /api/credential'))
+  register('PATCH', '/api/credential/:id', 'json', async (_req, ctx) =>
+    credentialProfileOnly(ctx, 'PATCH /api/credential/:id'))
+  register('POST', '/api/credential/:id/activate', 'json', async (_req, ctx) =>
+    credentialProfileOnly(ctx, 'POST /api/credential/:id/activate'))
+  register('DELETE', '/api/credential/:id', 'json', async (_req, ctx) =>
+    credentialProfileOnly(ctx, 'DELETE /api/credential/:id'))
 
   // shell — the 2.1.0 client reads `{ location, data: ShellInfo }`
   register('GET', '/api/shell', 'json', async () => R.json(200, { location: {}, data: [] }))

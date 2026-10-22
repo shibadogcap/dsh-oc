@@ -209,7 +209,7 @@ Agent にすでに turn/maintenance がある場合は 409、session が存在�
 | `GET /api/project/{projectID}` | MAP | 裸の `Project`。id が一致しない場合は 404 |
 | `PATCH /api/project/{projectID}` | MAP | 裸の `Project`（現在はエコーバックのみで、永続化しない）。id が一致しない場合は 404 |
 | `GET /api/agent` | STUB/LATER | `[]` |
-| `GET /api/integration` | MAP | 資格情報のある provider ごとに 1 件（`methods: []` と env 接続）。無いときは profile を説明する案内 1 件 |
+| `GET /api/integration` | MAP | 資格情報のある provider ごとに 1 件（`methods: []` と `dsh profile` という credential 接続。この接続が行を表示させます）。無いときは profile を説明する案内 1 件 |
 | `POST /api/integration/{id}/connect/*` | REJECT | 400 `integration/profile-configured`。資格情報は dsh の profile にあります |
 | `GET /api/vcs` | MAP | `{ provider: "git", branch: { current, default } }`。worktree の外では `null` |
 | `GET /api/vcs/base` | MAP | 既定ブランチとの merge base（`source: "default"`）。無ければ最初の commit |
