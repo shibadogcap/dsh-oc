@@ -60,11 +60,11 @@ e2e_tui_wait_attach
 wait_tui_ready
 echo "  TUI ready"
 
-AGENTS="$(curl -s "$E2E_BRIDGE_URL/agent")"
-FIRST="$(jq -r '.[0].name // empty' <<<"$AGENTS")"
-SECOND="$(jq -r '.[1].name // empty' <<<"$AGENTS")"
+AGENTS="$(curl -s "$E2E_BRIDGE_URL/api/agent")"
+FIRST="$(jq -r '.data[0].id // empty' <<<"$AGENTS")"
+SECOND="$(jq -r '.data[1].id // empty' <<<"$AGENTS")"
 if [[ -z "$FIRST" || -z "$SECOND" || "$FIRST" == "$SECOND" ]]; then
-  echo "e2e: need at least two agents from /agent (got: $FIRST, $SECOND)" >&2
+  echo "e2e: need at least two agents from /api/agent (got: $FIRST, $SECOND)" >&2
   exit 1
 fi
 echo "  agents: $FIRST -> $SECOND"
@@ -73,13 +73,13 @@ tmux send-keys -t "$E2E_TUI_SESSION" 'first turn message' Enter
 SID=""
 deadline=$((SECONDS + 30))
 while (( SECONDS < deadline )); do
-  SID="$(curl -s "$E2E_BRIDGE_URL/session" | jq -r '.[0].id // empty' 2>/dev/null || true)"
+  SID="$(curl -s "$E2E_BRIDGE_URL/api/session" | jq -r '.[0].id // empty' 2>/dev/null || true)"
   if [[ -n "$SID" ]]; then break; fi
   sleep 1
 done
 [[ -n "$SID" ]]
 echo "  session $SID"
-wait_assistant_text "$E2E_BRIDGE_URL/session/$SID/message" "mock response recovered"
+wait_assistant_text "$E2E_BRIDGE_URL/api/session/$SID/message" "mock response recovered"
 echo "  first turn completed"
 
 echo "== Tab + submit on a session with turns must be locked =="
@@ -104,8 +104,8 @@ if [[ -z "$NOTICE_SEEN" ]]; then
 fi
 echo "  lock notice visible"
 
-wait_assistant_text "$E2E_BRIDGE_URL/session/$SID/message" "second turn message"
-SESSION_AGENT="$(curl -s "$E2E_BRIDGE_URL/session" | jq -r --arg id "$SID" '.[] | select(.id == $id) | .agent // empty' 2>/dev/null || true)"
+wait_assistant_text "$E2E_BRIDGE_URL/api/session/$SID/message" "second turn message"
+SESSION_AGENT="$(curl -s "$E2E_BRIDGE_URL/api/session" | jq -r --arg id "$SID" '.[] | select(.id == $id) | .agent // empty' 2>/dev/null || true)"
 if [[ -z "$SESSION_AGENT" || "$SESSION_AGENT" == "$SECOND" ]]; then
   echo "e2e: agent unexpectedly switched to $SECOND (session agent: $SESSION_AGENT)" >&2
   exit 1

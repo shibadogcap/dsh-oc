@@ -4,7 +4,17 @@ import type { Readable } from 'node:stream'
 import { isAbsolute, resolve } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { createUserMessage } from '@deepseek-ai/dsh-llm/message'
-import type { Message, Part } from '@opencode-ai/sdk/client'
+
+declare module '@deepseek-ai/dsh-llm' {
+  interface MessageSourceMap {
+    'dsh-oc': {
+      kind: 'dsh-oc'
+      plugin: string
+      form: string
+      summary: string
+    }
+  }
+}
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { resolveAgent as resolveHostAgent, RpcCallError } from './rpc.js'
 import type { BridgeRouteContext } from './router.js'
@@ -15,6 +25,7 @@ import {
   type ToolCallInfo,
   type ToolResultInfo,
 } from './convert/tool.js'
+import type { WireMessageInfo, WirePart } from './convert/wire.js'
 import { DEFAULT_AGENT, externalProviderId, projectIdFor } from './convert/common.js'
 import { makeEvent } from './events-util.js'
 import { HttpError, badRequest, conflict, internalError, notFound, rpcErrorToHttp } from './errors.js'
@@ -27,8 +38,8 @@ export interface ShellCommandBody {
 }
 
 export interface ShellCommandResult {
-  info: Message
-  parts: Part[]
+  info: WireMessageInfo
+  parts: WirePart[]
 }
 
 interface MaintenanceAgent extends Agent {
@@ -218,9 +229,9 @@ function shellMessageInfo(
   agent: string,
   model: { providerID: string; modelID: string },
   parentID?: string,
-): Message {
+): WireMessageInfo {
   if (role === 'user') {
-    return { id, sessionID: sessionId, role, time: { created }, agent, model } as Message
+    return { id, sessionID: sessionId, role, time: { created }, agent, model }
   }
   return {
     id,
@@ -235,10 +246,10 @@ function shellMessageInfo(
     path: { cwd: directory, root: directory },
     cost: 0,
     tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
-  } as Message
+  }
 }
 
-function shellUserPart(sessionId: string, messageId: string, created: number): Part {
+function shellUserPart(sessionId: string, messageId: string, created: number): WirePart {
   return {
     id: `${messageId}:0`,
     sessionID: sessionId,
@@ -247,7 +258,7 @@ function shellUserPart(sessionId: string, messageId: string, created: number): P
     text: 'The following tool was executed by the user',
     synthetic: true,
     time: { start: created, end: created },
-  } as Part
+  }
 }
 
 function renderShellOutput(result: ShellRunResult): string {
@@ -390,7 +401,7 @@ function shellContextMessage(command: string, result: ShellRunResult) {
       text: contextText,
     }],
     source: {
-      kind: 'plugin',
+      kind: 'dsh-oc',
       plugin: SHELL_CONTEXT_PLUGIN,
       form: 'notice',
       summary: 'The user manually executed a shell command',
@@ -506,8 +517,8 @@ export async function runShellCommand(
         errorMessage: 'shell execution did not settle',
       }
       let finalized = false
-      let finishedInfo: Message = assistantInfo
-      let finishedPart: Part | undefined
+      let finishedInfo: WireMessageInfo = assistantInfo
+      let finishedPart: WirePart | undefined
       const finalize = (): void => {
         if (finalized) return
         finalized = true
@@ -522,7 +533,7 @@ export async function runShellCommand(
         finishedPart = shellError(result) === undefined
           ? completedToolPart(call, resultInfo, { sessionID: sessionId, messageID: assistantId, time: created })
           : errorToolPart(call, resultInfo, { sessionID: sessionId, messageID: assistantId, time: created })
-        finishedInfo = { ...assistantInfo, time: { created, completed } } as Message
+        finishedInfo = { ...assistantInfo, time: { created, completed } }
         // A host/session-removed edge may arrive while the owned child is
         // draining.  clearSession already aborts the child; never recreate its
         // history or status entry from this late completion.

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Prove the fake attach binary blocks while idle instead of spinning on EOF.
+# Prove the fake TUI binary blocks while idle instead of spinning on EOF.
 # This test starts its own process group through monitor-process-io.sh; the
 # monitor is explicitly allowed to terminate that owned group after sampling.
 set -euo pipefail
@@ -17,9 +17,9 @@ DSH_OC_FAKE_LOG="$RUN_DIR/fake.log" \
   "$ROOT/scripts/monitor-process-io.sh" \
   --start --terminate-owned --include-descendants \
   --interval 0.1 --samples 6 --log "$RUN_DIR/io.tsv" -- \
-  "$ROOT/tests/e2e/fake-opencode.sh" attach http://127.0.0.1:1
+  "$ROOT/tests/e2e/fake-opencode.sh" --server http://127.0.0.1:1
 
-grep -q '^attach$' "$RUN_DIR/fake.log"
+grep -q '^--server$' "$RUN_DIR/fake.log"
 awk -F '\t' '
   NR == 1 { next }
   NR == 2 { next }

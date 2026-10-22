@@ -40,7 +40,7 @@ tmux send-keys -t "$E2E_TUI_SESSION" 'crash me mid-stream' Enter
 SID=""
 deadline=$((SECONDS + 30))
 while (( SECONDS < deadline )); do
-  SID="$(curl -s "$E2E_BRIDGE_URL/session" | jq -r '.[0].id // empty' 2>/dev/null || true)"
+  SID="$(curl -s "$E2E_BRIDGE_URL/api/session" | jq -r '.data[0].id // empty' 2>/dev/null || true)"
   if [[ -n "$SID" ]]; then break; fi
   sleep 1
 done
@@ -67,8 +67,6 @@ fi
 echo "  stream started (partial text visible)"
 
 recovery_signature_v2 "$E2E_BRIDGE_URL" "$SID" "$E2E_RUN_DIR/pre-crash-v2.json"
-recovery_signature_v1 "$E2E_BRIDGE_URL" "$SID" "$E2E_RUN_DIR/pre-crash-v1.json"
-echo "  pre-crash signature saved"
 
 DSH_PID="$E2E_TUI_DSH_PID"
 if [[ ! "$DSH_PID" =~ ^[0-9]+$ ]] || ! ps -p "$DSH_PID" >/dev/null 2>&1; then
@@ -80,12 +78,12 @@ ATTACH_PID="$E2E_TUI_ATTACH_PID"
 ATTACH_PARENT="$(ps -p "$ATTACH_PID" -o ppid= 2>/dev/null | tr -d '[:space:]' || true)"
 ATTACH_ARGS="$(ps -p "$ATTACH_PID" -o args= 2>/dev/null || true)"
 if [[ ! "$ATTACH_PID" =~ ^[0-9]+$ || "$ATTACH_PARENT" != "$DSH_PID" \
-  || "$ATTACH_ARGS" != *"opencode attach http://127.0.0.1:"* ]]; then
-  echo "e2e: cannot locate the exact attach child before dsh crash; refusing to run an unscoped kill" >&2
+  || "$ATTACH_ARGS" != *"opencode --server http://127.0.0.1:"* ]]; then
+  echo "e2e: cannot locate the exact TUI child before dsh crash; refusing to run an unscoped kill" >&2
   exit 1
 fi
 kill -9 "$DSH_PID"
-# The opencode attach child becomes an orphan; kill only the exact child that
+# The opencode TUI child becomes an orphan; kill only the exact child that
 # was observed under this run's dsh parent, never a process found by name.
 kill -9 "$ATTACH_PID" 2>/dev/null || true
 deadline=$((SECONDS + 15))
@@ -101,9 +99,7 @@ e2e_tui_start "--session $SID"
 e2e_tui_wait_attach
 recovery_wait_tui_ready
 recovery_signature_v2 "$E2E_BRIDGE_URL" "$SID" "$E2E_RUN_DIR/restart-v2.json"
-recovery_signature_v1 "$E2E_BRIDGE_URL" "$SID" "$E2E_RUN_DIR/restart-v1.json"
 recovery_assert_crash_prefix "v2 restart" "$E2E_RUN_DIR/restart-v2.json" "$E2E_RUN_DIR/pre-crash-v2.json"
-recovery_assert_crash_prefix "v1 restart" "$E2E_RUN_DIR/restart-v1.json" "$E2E_RUN_DIR/pre-crash-v1.json"
 echo "  restart graph is a prefix of the last observed projection"
 
 # The session must reach idle. dsh may restore the in-flight turn as running;
@@ -122,10 +118,7 @@ curl -s -X POST "$E2E_BRIDGE_URL/api/session/$SID/prompt" \
   -d '{"parts":[{"type":"text","text":"continue after crash"}]}' >/dev/null
 recovery_wait_idle "$E2E_BRIDGE_URL" "$SID"
 recovery_signature_v2 "$E2E_BRIDGE_URL" "$SID" "$E2E_RUN_DIR/final-v2.json"
-recovery_signature_v1 "$E2E_BRIDGE_URL" "$SID" "$E2E_RUN_DIR/final-v1.json"
-recovery_assert_sane "$E2E_RUN_DIR/final-v1.json" "$E2E_RUN_DIR/final-v2.json"
 recovery_assert_prefix "v2 final" "$E2E_RUN_DIR/restart-v2.json" "$E2E_RUN_DIR/final-v2.json"
-recovery_assert_prefix "v1 final" "$E2E_RUN_DIR/restart-v1.json" "$E2E_RUN_DIR/final-v1.json"
 
 # No duplicate message ids, exactly one continuation user, and exactly one
 # settled assistant. dsh 0.1.5 does not persist the in-flight stream, so the
@@ -148,12 +141,12 @@ echo "== exit through prompt submit =="
 e2e_tui_exit
 e2e_tui_after_checks
 
-# The crash phase deliberately killed its attach child before reparenting; the
+# The crash phase deliberately killed its TUI child before reparenting; the
 # restart phase must also leave no run-owned dsh/TUI process behind. Keep this
 # assertion scoped to the current run directory so unrelated/manual sessions
 # remain untouched and diagnosable by their own monitors.
 LEFTOVERS="$(ps -eo pid=,args= | awk -v run="$E2E_RUN_DIR" \
-  '$0 !~ /awk -v run=/ && $0 ~ run && ($0 ~ /dsh --profile/ || $0 ~ /opencode attach http:\/\/127\.0\.0\.1:/) { print }' || true)"
+  '$0 !~ /awk -v run=/ && $0 ~ run && ($0 ~ /dsh --profile/ || $0 ~ /opencode --server http:\/\/127\.0\.0\.1:/) { print }' || true)"
 if [[ -n "$LEFTOVERS" ]]; then
   echo "e2e: recovery run left owned processes:" >&2
   echo "$LEFTOVERS" >&2

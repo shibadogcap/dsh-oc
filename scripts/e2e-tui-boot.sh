@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Real opencode TUI boot e2e: dsh --profile oc boots, spawns
-# `opencode attach http://127.0.0.1:<port>`, the TUI renders, and a typed
+# `opencode --server http://127.0.0.1:<port>`, the TUI renders, and a typed
 # `exit` leaves dsh with code 0 and a cooked terminal.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -19,18 +19,18 @@ trap cleanup EXIT
 
 e2e_new_run "tui-boot" "danger-full-access" "success" "1"
 
-echo "== boot dsh + real opencode attach =="
+echo "== boot dsh + real opencode TUI =="
 e2e_tui_start ""
-# e2e_tui_wait_attach already asserts the dsh child is `opencode attach`, not
-# `opencode serve`; a global ps check would false-positive on any pre-existing
-# user-run opencode server on the machine.
+# e2e_tui_wait_attach already asserts the dsh child is `opencode --server`,
+# not `opencode serve`; a global ps check would false-positive on any
+# pre-existing user-run opencode server on the machine.
 e2e_tui_wait_attach
 
 TUI_HINT=""
 deadline=$((SECONDS + 45))
 while (( SECONDS < deadline )); do
   e2e_tui_capture "$E2E_RUN_DIR/tui-boot.txt"
-  for pattern in "Ask anything" "Mock Model" "DeepSeek" "opencode" "OpenCode" "ctrl+p" "agents" "1.18.18"; do
+  for pattern in "Ask anything" "Mock Model" "DeepSeek" "opencode" "OpenCode" "ctrl+p" "agents" "2.1.0"; do
     if grep -qa "$pattern" "$E2E_RUN_DIR/tui-boot.txt"; then
       TUI_HINT="$pattern"
       break 2
@@ -58,7 +58,9 @@ fi
 echo "== exit through prompt submit =="
 e2e_tui_exit
 e2e_tui_capture "$E2E_RUN_DIR/tui-after.txt"
-if ! grep -qaE '➜|❯|\$ ' "$E2E_RUN_DIR/tui-after.txt"; then
+# The prompt shape depends on the shell and the theme: plain `➜` / `❯` /
+# `$ `, a powerline branch (U+E0B0), or a `user@host` line.
+if ! grep -qaE '➜|❯|\$ |'$'\ue0b0''|[A-Za-z0-9._-]+@[A-Za-z0-9._-]+' "$E2E_RUN_DIR/tui-after.txt"; then
   echo "e2e: shell prompt not restored after TUI exit" >&2
   exit 1
 fi

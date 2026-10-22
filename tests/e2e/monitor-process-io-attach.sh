@@ -31,8 +31,8 @@ cat > "$FAKE_BIN/ps" <<'EOF'
 set -euo pipefail
 attach_pid="$(<"${FAKE_ATTACH_PID_FILE:?}")"
 printf '424242 /usr/bin/dsh --profile oc --patch %s\n' "${FAKE_OVERLAY:?}"
-printf '%s 424242 /home/test/opencode attach http://127.0.0.1:4567\n' "$attach_pid"
-printf '525252 515151 /home/other/opencode attach http://127.0.0.1:9999\n'
+printf '%s 424242 /home/test/opencode --server http://127.0.0.1:4567\n' "$attach_pid"
+printf '525252 515151 /home/other/opencode --server http://127.0.0.1:9999\n'
 EOF
 chmod +x "$FAKE_BIN/ps"
 

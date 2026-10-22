@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # dsh-oc goal API e2e: mock LLM drives create_goal, the bridge translates
-# the durable goal/change into a merged todo.updated, GET /session/:id/todo
-# returns the goal first, and /goal works through the command registry.
+# the durable goal/change into a merged todo.updated SSE event, and /goal
+# works through the command registry.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 source tests/e2e/common.sh
@@ -34,104 +34,96 @@ e2e_start_dsh "$E2E_ACTIVE_SESSION"
 e2e_wait_bridge_url
 BRIDGE="$E2E_BRIDGE_URL"
 
-curl -s "$BRIDGE/command" | jq -e '([.[].name] | index("goal") != null)' >/dev/null
-echo "  /command advertises /goal"
 curl -s "$BRIDGE/api/command" | jq -e '([.data[].name] | index("goal") != null)' >/dev/null
 echo "  /api/command advertises /goal"
 
 SSE_FILE="$E2E_RUN_DIR/goal-sse.txt"
-curl -sN --max-time 120 "$BRIDGE/global/event" > "$SSE_FILE" &
+curl -sN --max-time 120 "$BRIDGE/api/event" > "$SSE_FILE" &
 SSE_PID=$!
 sleep 2
 
-# Run the goal surface on the standard preset: the goal tool must be in the
-# session's catalog, which a deployment may restrict away from minimal.
-SESSION="$(curl -s -X POST "$BRIDGE/session" -H 'Content-Type: application/json' -d '{"agent":"standard"}' | jq -er .id)"
-echo "  goal session: $SESSION"
-curl -s -X POST "$BRIDGE/session/$SESSION/message" -H 'Content-Type: application/json' \
-  -d '{"parts":[{"type":"text","text":"e2e: create a goal"}]}' | jq -e '.info.role == "assistant"' >/dev/null
-echo "  goal prompt accepted"
-
-wait_assistant_text() {
-  local url="$1"
-  local want="$2"
+# The v2 command route answers with 204, so the visible result of a command
+# and the merged goal/todo list both travel over the SSE stream.
+wait_sse() {
+  local want="$1"
   local deadline=$((SECONDS + 90))
   while (( SECONDS < deadline )); do
-    local text
-    text="$(curl -s "$url" | jq -r '[.. | objects | select(has("text")) | .text] | join(" ")' 2>/dev/null || true)"
-    if [[ "$text" == *"$want"* ]]; then
-      return 0
-    fi
-    sleep 2
+    if grep -q -- "$want" "$SSE_FILE"; then return 0; fi
+    sleep 1
   done
-  echo "e2e: assistant reply not seen for $url" >&2
-  curl -s "$url" >&2 || true
+  echo "e2e: SSE payload not seen: $want" >&2
   return 1
 }
-wait_assistant_text "$BRIDGE/session/$SESSION/message" "Goal created: ship e2e goal support"
 
-TODO_JSON="$(curl -s "$BRIDGE/session/$SESSION/todo")"
-jq -e --arg goal 'Goal: ship e2e goal support' 'any(.[]; .content == $goal and .status == "in_progress" and .priority == "high")' <<<"$TODO_JSON" >/dev/null
-echo "  /session/$SESSION/todo returns the active goal first"
+wait_todo_state() {
+  local content="$1"
+  local status="$2"
+  local deadline=$((SECONDS + 90))
+  while (( SECONDS < deadline )); do
+    if grep -q -- "\"content\":\"$content\",\"status\":\"$status\"" "$SSE_FILE"; then return 0; fi
+    sleep 1
+  done
+  echo "e2e: todo $content / $status not seen" >&2
+  return 1
+}
 
-GOAL_OUT="$(curl -s -X POST "$BRIDGE/session/$SESSION/command" -H 'Content-Type: application/json' \
-  -d '{"command":"goal","arguments":""}')"
-jq -e '.parts[0].text | contains("Status: active") and contains("ship e2e goal support")' <<<"$GOAL_OUT" >/dev/null
-echo "  POST /session/$SESSION/command /goal shows the current goal"
+# Run the goal surface on the standard preset: the goal tool must be in the
+# session's catalog, which a deployment may restrict away from minimal.
+SESSION="$(curl -s -X POST "$BRIDGE/api/session" -H 'Content-Type: application/json' -d '{"agent":"standard"}' | jq -er .data.id)"
+echo "  goal session: $SESSION"
+curl -s -X POST "$BRIDGE/api/session/$SESSION/prompt" -H 'Content-Type: application/json' \
+  -d '{"parts":[{"type":"text","text":"e2e: create a goal"}]}' | jq -e --arg s "$SESSION" '.data.sessionID == $s' >/dev/null
+echo "  goal prompt accepted"
 
-SESSION2="$(curl -s -X POST "$BRIDGE/session" -H 'Content-Type: application/json' -d '{}' | jq -er .id)"
-GOAL_CREATE_OUT="$(curl -s -X POST "$BRIDGE/session/$SESSION2/command" -H 'Content-Type: application/json' \
-  -d '{"command":"goal","arguments":"ship a second goal"}')"
-jq -e '.parts[0].text | contains("Goal created") and contains("ship a second goal")' <<<"$GOAL_CREATE_OUT" >/dev/null
-echo "  POST /session/$SESSION2/command /goal <objective> creates a goal"
+wait_sse "Goal created: ship e2e goal support"
+wait_todo_state "Goal: ship e2e goal support" "in_progress"
+echo "  todo.updated carries the active goal"
 
-GOAL_COMPLETE_OUT="$(curl -s -X POST "$BRIDGE/session/$SESSION2/command" -H 'Content-Type: application/json' \
-  -d '{"command":"goal","arguments":"complete"}')"
-if ! jq -e '.parts[0].text | test("completed|complete"; "i")' <<<"$GOAL_COMPLETE_OUT" >/dev/null; then
-  echo "e2e: /goal complete unexpected output: $GOAL_COMPLETE_OUT" >&2
-  exit 1
-fi
+curl -s -X POST "$BRIDGE/api/session/$SESSION/command" -H 'Content-Type: application/json' \
+  -d '{"name":"goal","text":""}' >/dev/null
+wait_sse "Status: active"
+echo "  POST /api/session/$SESSION/command /goal shows the current goal"
+
+SESSION2="$(curl -s -X POST "$BRIDGE/api/session" -H 'Content-Type: application/json' -d '{}' | jq -er .data.id)"
+curl -s -X POST "$BRIDGE/api/session/$SESSION2/command" -H 'Content-Type: application/json' \
+  -d '{"name":"goal","text":"ship a second goal"}' >/dev/null
+wait_sse "Goal created: ship a second goal"
+echo "  POST /api/session/$SESSION2/command /goal <objective> creates a goal"
+
+curl -s -X POST "$BRIDGE/api/session/$SESSION2/command" -H 'Content-Type: application/json' \
+  -d '{"name":"goal","text":"complete"}' >/dev/null
+wait_sse "Goal completed"
 echo "  /goal complete -> visible completion"
-TODO_AFTER_COMPLETE="$(curl -s "$BRIDGE/session/$SESSION2/todo")"
-jq -e --arg goal 'Goal: ship a second goal' 'any(.[]; .content == $goal and .status == "completed")' <<<"$TODO_AFTER_COMPLETE" >/dev/null
+wait_todo_state "Goal: ship a second goal" "completed"
 echo "  completed goal reflected in todo"
 
-SESSION3="$(curl -s -X POST "$BRIDGE/session" -H 'Content-Type: application/json' -d '{}' | jq -er .id)"
-curl -s -X POST "$BRIDGE/session/$SESSION3/command" -H 'Content-Type: application/json' \
-  -d '{"command":"goal","arguments":"ship a paused goal"}' >/dev/null
-GOAL_PAUSE_OUT="$(curl -s -X POST "$BRIDGE/session/$SESSION3/command" -H 'Content-Type: application/json' \
-  -d '{"command":"goal","arguments":"pause"}')"
-if ! jq -e '.parts[0].text | test("paused"; "i")' <<<"$GOAL_PAUSE_OUT" >/dev/null; then
-  echo "e2e: /goal pause unexpected output: $GOAL_PAUSE_OUT" >&2
-  exit 1
-fi
+SESSION3="$(curl -s -X POST "$BRIDGE/api/session" -H 'Content-Type: application/json' -d '{}' | jq -er .data.id)"
+curl -s -X POST "$BRIDGE/api/session/$SESSION3/command" -H 'Content-Type: application/json' \
+  -d '{"name":"goal","text":"ship a paused goal"}' >/dev/null
+curl -s -X POST "$BRIDGE/api/session/$SESSION3/command" -H 'Content-Type: application/json' \
+  -d '{"name":"goal","text":"pause"}' >/dev/null
+wait_todo_state "Goal: ship a paused goal" "pending"
 echo "  /goal pause -> visible pause"
-TODO_PAUSED="$(curl -s "$BRIDGE/session/$SESSION3/todo")"
-jq -e --arg goal 'Goal: ship a paused goal' 'any(.[]; .content == $goal and .status == "pending")' <<<"$TODO_PAUSED" >/dev/null
 echo "  paused goal reflected as pending todo"
 
-GOAL_RESUME_OUT="$(curl -s -X POST "$BRIDGE/session/$SESSION3/command" -H 'Content-Type: application/json' \
-  -d '{"command":"goal","arguments":"resume"}')"
-if ! jq -e '.parts[0].text | test("resumed|resume"; "i")' <<<"$GOAL_RESUME_OUT" >/dev/null; then
-  echo "e2e: /goal resume unexpected output: $GOAL_RESUME_OUT" >&2
-  exit 1
-fi
+curl -s -X POST "$BRIDGE/api/session/$SESSION3/command" -H 'Content-Type: application/json' \
+  -d '{"name":"goal","text":"resume"}' >/dev/null
+wait_todo_state "Goal: ship a paused goal" "in_progress"
 echo "  /goal resume -> visible resume"
-TODO_RESUMED="$(curl -s "$BRIDGE/session/$SESSION3/todo")"
-jq -e --arg goal 'Goal: ship a paused goal' 'any(.[]; .content == $goal and .status == "in_progress")' <<<"$TODO_RESUMED" >/dev/null
 echo "  resumed goal reflected as in_progress todo"
 
-GOAL_CLEAR_OUT="$(curl -s -X POST "$BRIDGE/session/$SESSION3/command" -H 'Content-Type: application/json' \
-  -d '{"command":"goal","arguments":"clear"}')"
-if ! jq -e '.parts[0].text | test("clear|cleared"; "i")' <<<"$GOAL_CLEAR_OUT" >/dev/null; then
-  echo "e2e: /goal clear unexpected output: $GOAL_CLEAR_OUT" >&2
-  exit 1
-fi
+curl -s -X POST "$BRIDGE/api/session/$SESSION3/command" -H 'Content-Type: application/json' \
+  -d '{"name":"goal","text":"clear"}' >/dev/null
+wait_sse "Goal cleared"
 echo "  /goal clear -> visible clear"
-TODO_CLEARED="$(curl -s "$BRIDGE/session/$SESSION3/todo")"
-if jq -e --arg goal 'Goal: ship a paused goal' 'any(.[]; .content == $goal)' <<<"$TODO_CLEARED" >/dev/null; then
-  echo "e2e: cleared goal still present in todo" >&2
-  exit 1
+if grep -q -- '"content":"Goal: ship a paused goal"' "$SSE_FILE"; then
+  # The cleared goal still appears in earlier todo.updated frames; the last
+  # one must not carry it any more.
+  LAST_TODO="$(grep -- '"type":"todo.updated"' "$SSE_FILE" | tail -1)"
+  if grep -q -- '"content":"Goal: ship a paused goal"' <<<"$LAST_TODO"; then
+    echo "e2e: cleared goal still present in todo" >&2
+    exit 1
+  fi
 fi
 echo "  cleared goal removed from todo"
 

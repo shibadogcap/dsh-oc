@@ -161,13 +161,13 @@ export async function resolveOpenCodeBinary(deps: BinaryResolverDeps = {}): Prom
   }
 
   const download = deps.download ?? downloadOpenCode
-  const bin = await download({ env, home, version, platform, manifest: deps.assets })
+  const bin = await download({ env, home, version, platform })
   return { bin, source: 'download' }
 }
 
 /** Official npm platform package name for a manifest asset key. */
 export function npmPackageNameFor(key: string): string {
-  return `opencode-${key}`
+  return `@opencode/cli-${key}`
 }
 
 /** Cache directory for an installed npm platform package. */
@@ -245,16 +245,25 @@ function pathEntries(pathValue: string): readonly string[] {
 
 function findPackageDirs(home: string, deps: BinaryResolverDeps): readonly string[] {
   const dirs: string[] = [...(deps.packageRoots ?? [])]
+  const packageNames = ['opencode-ai', '@opencode/cli']
   const profilesDir = join(home, 'profiles')
-  dirs.push(join(profilesDir, 'node_modules', 'opencode-ai'))
+  for (const name of packageNames) {
+    dirs.push(join(profilesDir, 'node_modules', name))
+  }
   try {
     for (const entry of deps.readdir?.(profilesDir) ?? readdirSync(profilesDir, { withFileTypes: true })) {
-      if (entry.isDirectory()) dirs.push(join(profilesDir, entry.name, 'node_modules', 'opencode-ai'))
+      if (entry.isDirectory()) {
+        for (const name of packageNames) {
+          dirs.push(join(profilesDir, entry.name, 'node_modules', name))
+        }
+      }
     }
   } catch {
     // No profiles directory yet.
   }
-  dirs.push(join(home, 'node_modules', 'opencode-ai'))
+  for (const name of packageNames) {
+    dirs.push(join(home, 'node_modules', name))
+  }
 
   const seen = new Set<string>()
   return dirs.filter(dir => {

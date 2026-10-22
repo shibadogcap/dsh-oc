@@ -218,5 +218,10 @@ function candidateKeys(
   }
 
   if (arch === 'x64') return baseline ? [`${base}-baseline`, base] : [base, `${base}-baseline`]
+  // Windows 11 on ARM64 can still run the x64 binary under emulation when
+  // the native one fails (mirrors @opencode/cli's postinstall.mjs).
+  if (platform === 'windows' && arch === 'arm64') {
+    return [base, `${platform}-x64-baseline`, `${platform}-x64`]
+  }
   return [base]
 }

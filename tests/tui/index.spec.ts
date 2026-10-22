@@ -93,7 +93,7 @@ function fakeChild(): {
 }
 
 describe('filterSupportedArgs', () => {
-  it('passes supported attach flags and reports the rest', () => {
+  it('passes supported flags and reports the rest', () => {
     const { pass, ignored } = filterSupportedArgs([
       '--continue',
       '-c',
@@ -112,6 +112,8 @@ describe('filterSupportedArgs', () => {
       '--prompt',
       'hello',
     ])
+    // `--dir` moves the bridge's working directory, so dsh-oc consumes it and
+    // does not forward it to the 2.x CLI.
     expect(pass).toEqual([
       '--continue',
       '-c',
@@ -119,8 +121,6 @@ describe('filterSupportedArgs', () => {
       'abc',
       '--session=xyz',
       '--fork',
-      '--dir',
-      '/tmp/work',
       '--mini',
       '--print-logs',
       '--log-level',
@@ -182,7 +182,7 @@ describe('ocHelp', () => {
   it('includes version, attach args, capability summary and docs entry', () => {
     const text = ocHelp('9.9.9')
     expect(text).toContain('dsh-oc 9.9.9')
-    expect(text).toContain('opencode 1.18.18')
+    expect(text).toContain('opencode 2.1.0')
     expect(text).toContain('--continue/-c')
     expect(text).toContain('--session/-s')
     expect(text).toContain('核心能力')
@@ -442,7 +442,7 @@ describe('startOpenCodeTui', () => {
     }
   })
 
-  it('spawns attach with the bridge URL and inherit stdio', () => {
+  it('spawns the 2.x CLI with --server and inherit stdio', () => {
     const fake = fakeChild()
     const spawn = vi.fn(() => fake.child)
     const onExit = vi.fn()
@@ -458,10 +458,29 @@ describe('startOpenCodeTui', () => {
 
     expect(spawn).toHaveBeenCalledWith(
       '/x/opencode',
-      ['attach', 'http://127.0.0.1:4096', '--mini'],
+      ['mini', '--server', 'http://127.0.0.1:4096'],
       { cwd: '/work', stdio: 'inherit', env: { FOO: 'bar' } },
     )
     expect(running.child).toBe(fake.child)
+  })
+
+  it('spawns the full TUI with --server when no subcommand is requested', () => {
+    const fake = fakeChild()
+    const spawn = vi.fn(() => fake.child)
+    startOpenCodeTui({
+      bin: '/x/opencode',
+      bridge: { url: 'http://127.0.0.1:4096', port: 4096 },
+      tuiArgs: ['--continue'],
+      cwd: '/work',
+      env: { FOO: 'bar' },
+      spawn,
+    })
+
+    expect(spawn).toHaveBeenCalledWith(
+      '/x/opencode',
+      ['--server', 'http://127.0.0.1:4096', '--continue'],
+      { cwd: '/work', stdio: 'inherit', env: { FOO: 'bar' } },
+    )
   })
 
   it('forwards signals and escalates SIGTERM to SIGKILL after the grace period', () => {

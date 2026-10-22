@@ -1,7 +1,7 @@
 import { Context, Service } from "@deepseek-ai/cordis";
 //#region src/bridge/index.d.ts
 declare const name = "@chiro2001/dsh-oc/bridge";
-declare const inject: readonly ['sessionController', 'agentPresets', 'goals', 'sessionSkillCatalog', 'agents', 'sessions', 'sessionProjections'];
+declare const inject: readonly ['sessionController', 'agentPresets', 'goals', 'sessionSkillCatalog', 'agents', 'sessions', 'sessionProjections', 'rewind'];
 /**
  * Keep older profile plugins (notably dsh-dcp rc.6) source-compatible with
  * dsh-session 0.1.2. The Session log was intentionally moved behind

@@ -83,7 +83,7 @@ wait_permission_dialog() {
   local deadline=$((SECONDS + 60))
   while (( SECONDS < deadline )); do
     local pending
-    pending="$(curl -s "$bridge/permission" | jq 'length' 2>/dev/null || echo 0)"
+    pending="$(curl -s "$bridge/api/permission/request" | jq '.data | length' 2>/dev/null || echo 0)"
     e2e_tui_capture_ansi "$file"
     if [[ "$pending" != "0" ]] && grep -qa 'Permission required' "$file" && grep -qa 'Allow once' "$file"; then
       return 0
@@ -139,7 +139,7 @@ select_allow_always() {
   local baseline_deadline=$((SECONDS + 5))
   while (( SECONDS < baseline_deadline )); do
     local pending baseline_once baseline_always current_signature
-    pending="$(curl -s "$bridge/permission" | jq 'length' 2>/dev/null || echo 0)"
+    pending="$(curl -s "$bridge/api/permission/request" | jq '.data | length' 2>/dev/null || echo 0)"
     e2e_tui_capture_ansi "$baseline"
     baseline_once="$(option_fg_sig "$baseline" 'Allow once')"
     baseline_always="$(option_fg_sig "$baseline" 'Allow always')"
@@ -158,7 +158,7 @@ select_allow_always() {
   done
   if [[ "$baseline_stable" != "1" ]]; then
     echo "e2e: permission baseline highlights did not stabilize before Right input" >&2
-    echo "  evidence: pending=$(curl -s "$bridge/permission" | jq 'length' 2>/dev/null || echo unknown)" >&2
+    echo "  evidence: pending=$(curl -s "$bridge/api/permission/request" | jq '.data | length' 2>/dev/null || echo unknown)" >&2
     tail -40 "$baseline" >&2 || true
     e2e_tui_capture_diagnostic "${baseline%.txt}-baseline-failure"
     return 1
@@ -174,7 +174,7 @@ select_allow_always() {
   local deadline=$((SECONDS + 5))
   while (( SECONDS < deadline )); do
     local pending current_once current_always
-    pending="$(curl -s "$bridge/permission" | jq 'length' 2>/dev/null || echo 0)"
+    pending="$(curl -s "$bridge/api/permission/request" | jq '.data | length' 2>/dev/null || echo 0)"
     e2e_tui_capture_ansi "$current"
     current_once="$(option_fg_sig "$current" 'Allow once')"
     current_always="$(option_fg_sig "$current" 'Allow always')"
@@ -184,7 +184,7 @@ select_allow_always() {
     sleep 0.25
   done
   echo "e2e: Right did not swap Allow once/always foreground signatures" >&2
-  echo "  evidence: pending=$(curl -s "$bridge/permission" | jq 'length' 2>/dev/null || echo unknown)" >&2
+  echo "  evidence: pending=$(curl -s "$bridge/api/permission/request" | jq '.data | length' 2>/dev/null || echo unknown)" >&2
   tail -40 "$current" >&2 || true
   echo "  baseline signatures: once=$base_once always=$base_always" >&2
   echo "  current signatures: once=$current_once always=$current_always" >&2
@@ -204,13 +204,13 @@ wait_prompt_started() {
   fi
   while (( SECONDS < deadline )); do
     local messages status mock_lines
-    messages="$(curl -s "$bridge/session/$sid/message" 2>/dev/null || true)"
+    messages="$(curl -s "$bridge/api/session/$sid/message" 2>/dev/null || true)"
     if jq -e --arg prompt "$prompt" \
       '[.. | objects | select(has("text")) | .text] | any(. == $prompt)' \
       <<<"$messages" >/dev/null 2>&1; then
       return 0
     fi
-    status="$(curl -s "$bridge/session/status" 2>/dev/null | jq -r --arg sid "$sid" '.[$sid].type // empty' 2>/dev/null || true)"
+    status="$(curl -s -o /dev/null -w '%{http_code}' -m 35 -X POST "$bridge/api/session/$sid/wait" 2>/dev/null || true)"
     if [[ "$status" == 'busy' ]]; then return 0; fi
     if [[ -n "${E2E_MOCK_ERR:-}" && -f "$E2E_MOCK_ERR" ]]; then
       mock_lines="$(wc -l < "$E2E_MOCK_ERR")"
@@ -226,7 +226,7 @@ wait_prompt_started() {
   done
   echo "e2e: prompt did not start: $prompt" >&2
   tail -40 "$evidence" >&2 2>/dev/null || true
-  curl -s "$bridge/session/$sid/message" >&2 2>/dev/null || true
+  curl -s "$bridge/api/session/$sid/message" >&2 2>/dev/null || true
   tail -8 "$E2E_MOCK_ERR" >&2 2>/dev/null || true
   return 1
 }
@@ -238,20 +238,20 @@ wait_reply_count() {
   local deadline=$((SECONDS + 90))
   while (( SECONDS < deadline )); do
     local text
-    text="$(curl -s "$bridge/session/$sid/message" | jq -r '[.. | objects | select(has("text")) | .text] | join(" ")' 2>/dev/null || true)"
+    text="$(curl -s "$bridge/api/session/$sid/message" | jq -r '[.. | objects | select(has("text")) | .text] | join(" ")' 2>/dev/null || true)"
     if [[ "$(grep -o 'mock response recovered' <<<"$text" | wc -l)" -ge "$n" ]]; then
       return 0
     fi
     sleep 1
   done
   echo "e2e: reply count $n not seen on $sid" >&2
-  curl -s "$bridge/session/$sid/message" >&2 || true
+  curl -s "$bridge/api/session/$sid/message" >&2 || true
   return 1
 }
 
 active_session_id() {
   local bridge="$1"
-  curl -s "$bridge/session" | jq -r '.[0].id // empty'
+  curl -s "$bridge/api/session" | jq -r '.data[0].id // empty'
 }
 
 echo "== run A: allow once / allow always / auto-approve =="
@@ -291,12 +291,12 @@ sleep 1
 AUTO_OK="1"
 deadline=$((SECONDS + 90))
 while (( SECONDS < deadline )); do
-  local_count="$(curl -s "$E2E_BRIDGE_URL/permission" | jq 'length' 2>/dev/null || echo 1)"
+  local_count="$(curl -s "$E2E_BRIDGE_URL/api/permission/request" | jq '.data | length' 2>/dev/null || echo 1)"
   if [[ "$local_count" != "0" ]]; then
     AUTO_OK=""
     break
   fi
-  local_text="$(curl -s "$E2E_BRIDGE_URL/session/$SID/message" | jq -r '[.. | objects | select(has("text")) | .text] | join(" ")' 2>/dev/null || true)"
+  local_text="$(curl -s "$E2E_BRIDGE_URL/api/session/$SID/message" | jq -r '[.. | objects | select(has("text")) | .text] | join(" ")' 2>/dev/null || true)"
   if [[ "$(grep -o 'mock response recovered' <<<"$local_text" | wc -l)" -ge 1 ]]; then
     break
   fi
@@ -307,7 +307,7 @@ if [[ -z "$AUTO_OK" ]]; then
   exit 1
 fi
 wait_reply_count "$E2E_BRIDGE_URL" "$SID" 1
-curl -s "$E2E_BRIDGE_URL/permission" | jq -e 'length == 0' >/dev/null
+curl -s "$E2E_BRIDGE_URL/api/permission/request" | jq -e '.data | length == 0' >/dev/null
 SAVED="$(curl -s "$E2E_BRIDGE_URL/api/permission/saved")"
 jq -e --arg s "$SID" '.data | any(.sessionID == $s and .id == "\($s):bash")' <<<"$SAVED" >/dev/null
 echo "  allow once + allow always + auto-approve verified; bash grant saved"
@@ -350,7 +350,7 @@ tmux send-keys -t "$E2E_TUI_SESSION" Right
 sleep 1
 tmux send-keys -t "$E2E_TUI_SESSION" Enter
 wait_reply_count "$E2E_BRIDGE_URL" "$SID" 1
-curl -s "$E2E_BRIDGE_URL/permission" | jq -e 'length == 0' >/dev/null
+curl -s "$E2E_BRIDGE_URL/api/permission/request" | jq -e '.data | length == 0' >/dev/null
 SAVED="$(curl -s "$E2E_BRIDGE_URL/api/permission/saved")"
 if jq -e --arg s "$SID" '.data | any(.sessionID == $s and (.id | endswith(":edit")))' <<<"$SAVED" >/dev/null; then
   echo "e2e: reject unexpectedly saved an edit grant" >&2
@@ -360,7 +360,7 @@ echo "  reject cleared permission; no saved grant"
 
 e2e_tui_capture "$E2E_RUN_DIR/perm-reject-result.txt"
 tmux capture-pane -p -S -300 -t "$E2E_TUI_SESSION" > "$E2E_RUN_DIR/perm-reject-scrollback.txt" 2>/dev/null || true
-REJECT_MSG="$(curl -s "$E2E_BRIDGE_URL/session/$SID/message" | jq -r '.. | strings | select(test("reject"; "i"))' 2>/dev/null | head -1 || true)"
+REJECT_MSG="$(curl -s "$E2E_BRIDGE_URL/api/session/$SID/message" | jq -r '.. | strings | select(test("reject"; "i"))' 2>/dev/null | head -1 || true)"
 if ! grep -qia 'rejected' "$E2E_RUN_DIR/perm-reject-result.txt" \
   && ! grep -qia 'rejected' "$E2E_RUN_DIR/perm-reject-scrollback.txt" \
   && [[ -z "$REJECT_MSG" ]]; then
@@ -404,7 +404,7 @@ wait_prompt_started "$E2E_BRIDGE_URL" "$SID" 'ask me a question' "$E2E_RUN_DIR/p
 QUESTION_SEEN=""
 deadline=$((SECONDS + 60))
 while (( SECONDS < deadline )); do
-  QLEN="$(curl -s "$E2E_BRIDGE_URL/question" | jq 'length' 2>/dev/null || echo 0)"
+  QLEN="$(curl -s "$E2E_BRIDGE_URL/api/question/request" | jq '.data | length' 2>/dev/null || echo 0)"
   e2e_tui_capture "$E2E_RUN_DIR/question-dialog.txt"
   if [[ "$QLEN" != "0" ]] && grep -qa 'Pick a language' "$E2E_RUN_DIR/question-dialog.txt"; then
     QUESTION_SEEN="1"
@@ -426,10 +426,10 @@ echo "  question dialog shown"
 
 tmux send-keys -t "$E2E_TUI_SESSION" Enter
 wait_reply_count "$E2E_BRIDGE_URL" "$SID" 1
-curl -s "$E2E_BRIDGE_URL/question" | jq -e 'length == 0' >/dev/null
+curl -s "$E2E_BRIDGE_URL/api/question/request" | jq -e '.data | length == 0' >/dev/null
 e2e_tui_capture "$E2E_RUN_DIR/question-answered.txt"
 grep -qa 'mock response recovered' "$E2E_RUN_DIR/question-answered.txt"
-echo "  question answered; /question empty; turn completed"
+echo "  question answered; /api/question/request empty; turn completed"
 
 tmux kill-session -t "$E2E_TUI_SESSION" 2>/dev/null || true
 node "$E2E_ENV_JS" stop "$E2E_RUNID" >/dev/null
@@ -459,7 +459,7 @@ wait_permission_dialog "$E2E_BRIDGE_URL" "$E2E_RUN_DIR/perm-mini-dialog.txt"
 echo "  mini permission dialog shown"
 tmux send-keys -t "$E2E_TUI_SESSION" Enter
 wait_reply_count "$E2E_BRIDGE_URL" "$SID" 1
-curl -s "$E2E_BRIDGE_URL/permission" | jq -e 'length == 0' >/dev/null
+curl -s "$E2E_BRIDGE_URL/api/permission/request" | jq -e '.data | length == 0' >/dev/null
 e2e_tui_capture "$E2E_RUN_DIR/perm-mini-reply.txt"
 REPLY_COUNT="$(grep -o 'mock response recovered' "$E2E_RUN_DIR/perm-mini-reply.txt" | wc -l)"
 if [[ "$REPLY_COUNT" != "1" ]]; then
@@ -502,12 +502,12 @@ sleep 1
 AUTO_OK="1"
 deadline=$((SECONDS + 90))
 while (( SECONDS < deadline )); do
-  local_count="$(curl -s "$E2E_BRIDGE_URL/permission" | jq 'length' 2>/dev/null || echo 1)"
+  local_count="$(curl -s "$E2E_BRIDGE_URL/api/permission/request" | jq '.data | length' 2>/dev/null || echo 1)"
   if [[ "$local_count" != "0" ]]; then
     AUTO_OK=""
     break
   fi
-  local_text="$(curl -s "$E2E_BRIDGE_URL/session/$SID/message" | jq -r '[.. | objects | select(has("text")) | .text] | join(" ")' 2>/dev/null || true)"
+  local_text="$(curl -s "$E2E_BRIDGE_URL/api/session/$SID/message" | jq -r '[.. | objects | select(has("text")) | .text] | join(" ")' 2>/dev/null || true)"
   if [[ "$(grep -o 'mock response recovered' <<<"$local_text" | wc -l)" -ge 1 ]]; then
     break
   fi
@@ -563,13 +563,13 @@ tmux send-keys -t "$E2E_TUI_SESSION" Enter
 sleep 1
 e2e_tui_capture "$E2E_RUN_DIR/perm-mini-reject-confirm.txt"
 if grep -qa 'Reject permission\|Confirm' "$E2E_RUN_DIR/perm-mini-reject-confirm.txt"; then
-  if [[ "$(curl -s "$E2E_BRIDGE_URL/permission" | jq 'length' 2>/dev/null || echo 0)" != "0" ]]; then
+  if [[ "$(curl -s "$E2E_BRIDGE_URL/api/permission/request" | jq '.data | length' 2>/dev/null || echo 0)" != "0" ]]; then
     tmux send-keys -t "$E2E_TUI_SESSION" Enter
     sleep 1
   fi
 fi
 wait_reply_count "$E2E_BRIDGE_URL" "$SID" 1
-curl -s "$E2E_BRIDGE_URL/permission" | jq -e 'length == 0' >/dev/null
+curl -s "$E2E_BRIDGE_URL/api/permission/request" | jq -e '.data | length == 0' >/dev/null
 SAVED="$(curl -s "$E2E_BRIDGE_URL/api/permission/saved")"
 if jq -e --arg s "$SID" '.data | any(.sessionID == $s and (.id | endswith(":edit")))' <<<"$SAVED" >/dev/null; then
   echo "e2e: mini reject unexpectedly saved an edit grant" >&2
@@ -581,7 +581,7 @@ if [[ -e "$E2E_WORKDIR/reject.txt" ]]; then
 fi
 e2e_tui_capture "$E2E_RUN_DIR/perm-mini-reject-reply.txt"
 tmux capture-pane -p -S -300 -t "$E2E_TUI_SESSION" > "$E2E_RUN_DIR/perm-mini-reject-scrollback.txt" 2>/dev/null || true
-REJECT_MSG="$(curl -s "$E2E_BRIDGE_URL/session/$SID/message" | jq -r '.. | strings | select(test("reject"; "i"))' 2>/dev/null | head -1 || true)"
+REJECT_MSG="$(curl -s "$E2E_BRIDGE_URL/api/session/$SID/message" | jq -r '.. | strings | select(test("reject"; "i"))' 2>/dev/null | head -1 || true)"
 if ! grep -qia 'rejected' "$E2E_RUN_DIR/perm-mini-reject-reply.txt" \
   && ! grep -qia 'rejected' "$E2E_RUN_DIR/perm-mini-reject-scrollback.txt" \
   && [[ -z "$REJECT_MSG" ]]; then
@@ -619,7 +619,7 @@ wait_prompt_started "$E2E_BRIDGE_URL" "$SID" 'mini ask a question' "$E2E_RUN_DIR
 QUESTION_SEEN=""
 deadline=$((SECONDS + 60))
 while (( SECONDS < deadline )); do
-  QLEN="$(curl -s "$E2E_BRIDGE_URL/question" | jq 'length' 2>/dev/null || echo 0)"
+  QLEN="$(curl -s "$E2E_BRIDGE_URL/api/question/request" | jq '.data | length' 2>/dev/null || echo 0)"
   e2e_tui_capture "$E2E_RUN_DIR/perm-mini-question-dialog.txt"
   if [[ "$QLEN" != "0" ]] && grep -qa 'Pick a language' "$E2E_RUN_DIR/perm-mini-question-dialog.txt"; then
     QUESTION_SEEN="1"
@@ -639,14 +639,14 @@ if [[ -z "$QUESTION_SEEN" ]]; then
 fi
 tmux send-keys -t "$E2E_TUI_SESSION" Enter
 wait_reply_count "$E2E_BRIDGE_URL" "$SID" 1
-curl -s "$E2E_BRIDGE_URL/question" | jq -e 'length == 0' >/dev/null
+curl -s "$E2E_BRIDGE_URL/api/question/request" | jq -e '.data | length == 0' >/dev/null
 e2e_tui_capture "$E2E_RUN_DIR/perm-mini-question-reply.txt"
 REPLY_COUNT="$(grep -o 'mock response recovered' "$E2E_RUN_DIR/perm-mini-question-reply.txt" | wc -l)"
 if [[ "$REPLY_COUNT" != "1" ]]; then
   echo "e2e: mini question rendered the reply $REPLY_COUNT times (expected 1)" >&2
   exit 1
 fi
-echo "  mini question answered; /question empty; reply rendered once"
+echo "  mini question answered; /api/question/request empty; reply rendered once"
 
 tmux kill-session -t "$E2E_TUI_SESSION" 2>/dev/null || true
 node "$E2E_ENV_JS" stop "$E2E_RUNID" >/dev/null

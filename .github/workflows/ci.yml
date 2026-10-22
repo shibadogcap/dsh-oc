@@ -42,6 +42,6 @@ jobs:
 
       - name: Protocol probe (fake locked binary)
         run: |
-          printf '%s\n' '#!/usr/bin/env bash' 'printf "%s\n" "1.18.18"' > /tmp/opencode-fake
+          printf '%s\n' '#!/usr/bin/env bash' 'printf "%s\n" "2.1.0"' > /tmp/opencode-fake
           chmod +x /tmp/opencode-fake
           DSH_OC_OPENCODE_BIN=/tmp/opencode-fake pnpm run probe

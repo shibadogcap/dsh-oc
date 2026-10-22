@@ -1,5 +1,6 @@
 import type { SessionSummary } from '../dsh-types.js'
-import type { Session, SessionV2Info } from '@opencode-ai/sdk/v2'
+import type { SessionInfo as ClientSessionInfo, SessionRevert as ClientSessionRevert, LocationPublicRef as ClientLocationPublicRef } from '@opencode/client'
+import type { WireSessionInfo } from './wire.js'
 import {
   DEFAULT_AGENT,
   externalProviderId,
@@ -27,13 +28,21 @@ export interface SessionConvertOptions {
   agent?: string
   /** Optional lineage metadata learned from the live bridge state. */
   metadata?: Record<string, unknown>
+  /**
+   * The staged revert of the session, as OpenCode reports it on
+   * `Session.Info.revert`. The 2.x client reads it to show the boundary
+   * marker and to know which messages the next commit removes.
+   */
+  revert?: ClientSessionRevert
 }
 
 /** OpenCode SDK v2 1.18.18 omits metadata from its generated type, but the TUI accepts
  * the same lineage marker carried by the v1 Session shape. */
-export type SessionV2InfoWithMetadata = SessionV2Info & {
+type SessionV2Info = Omit<ClientSessionInfo, 'location' | 'metadata'> & {
+  location: ClientLocationPublicRef & { workspaceID?: string }
   metadata?: Record<string, unknown>
 }
+export type SessionV2InfoWithMetadata = SessionV2Info
 
 export function sessionTitleFrom(summary: SessionSummary, override?: string): string {
   const values = summary.projections?.values as Partial<Record<string, unknown>> | undefined
@@ -56,13 +65,13 @@ export function sessionMetadataFrom(summary: SessionSummary): Record<string, unk
 }
 
 /**
- * Convert a dsh `SessionSummary` into the opencode v2 `Session` shape
- * (a structural superset of the v1 `Session`).
+ * Convert a dsh `SessionSummary` into the opencode `session.updated`
+ * projection the SSE stream publishes.
  */
 export function convertSessionSummary(
   summary: SessionSummary,
   options: SessionConvertOptions,
-): Session {
+): WireSessionInfo {
   const directory = summary.cwd ?? options.cwd
   const createdAt = options.createdAt ?? summary.updatedAt
   const title = sessionTitleFrom(summary, options.title)
@@ -116,6 +125,7 @@ export function convertSessionSummaryV2(
       updated: summary.updatedAt,
     },
     title: sessionTitleFrom(summary, options.title),
+    ...(options.revert === undefined ? {} : { revert: options.revert }),
     location: {
       directory,
     },
@@ -132,7 +142,7 @@ export function minimalSession(
     metadata?: Record<string, unknown>
     agent?: string
   },
-): Session {
+): WireSessionInfo {
   const directory = options.cwd
   const created = options.createdAt ?? Date.now()
   return {
@@ -175,6 +185,7 @@ export function minimalSessionV2(
     },
     time: { created, updated: Date.now() },
     title: options.title ?? '',
+    ...(options.revert === undefined ? {} : { revert: options.revert }),
     location: { directory },
     ...(options.model === undefined ? {} : { model: options.model }),
   }

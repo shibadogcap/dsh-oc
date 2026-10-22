@@ -2,9 +2,18 @@
 # Shared helpers for the dsh-oc e2e shell drivers.
 set -euo pipefail
 
-export HTTPS_PROXY="${HTTPS_PROXY:-http://127.0.0.1:14514}"
-export HTTP_PROXY="${HTTP_PROXY:-http://127.0.0.1:14514}"
-# Bridge and opencode attach traffic targets 127.0.0.1; it must never be
+# The e2e runs need an outbound proxy on 127.0.0.1:14514 in CI, where the
+# runner has no direct access to the npm registry. A machine that reaches the
+# registry directly must not be pointed at a proxy that is not there: pnpm
+# then fails with a tunnel error instead of installing. The default is
+# therefore applied only when the local proxy actually answers.
+e2e_default_proxy="http://127.0.0.1:14514"
+if ! (exec 3<>/dev/tcp/127.0.0.1/14514) 2>/dev/null; then
+  e2e_default_proxy=""
+fi
+export HTTPS_PROXY="${HTTPS_PROXY:-$e2e_default_proxy}"
+export HTTP_PROXY="${HTTP_PROXY:-$e2e_default_proxy}"
+# Bridge and opencode TUI traffic targets 127.0.0.1; it must never be
 # routed through the outer proxy (CI runners have no local proxy service).
 export NO_PROXY="${NO_PROXY:+$NO_PROXY,}127.0.0.1,localhost"
 export no_proxy="$NO_PROXY"
@@ -208,11 +217,11 @@ e2e_tui_io_monitor_start() {
   E2E_TUI_IO_MONITOR_LOG="$log_file"
   E2E_TUI_IO_MONITOR_WARN="$warning_file"
   E2E_TUI_IO_MONITOR_SEQ=$((E2E_TUI_IO_MONITOR_SEQ + 1))
-  echo "e2e: observing opencode attach pid=$attach_pid (log=$log_file)"
+  echo "e2e: observing opencode TUI pid=$attach_pid (log=$log_file)"
 }
 
 # Start the real opencode TUI through dsh inside tmux; `extra` receives any
-# attach flags (e.g. `--session <id>`). `--print-logs` reaches the attach
+# TUI flags (e.g. `--session <id>`). `--print-logs` reaches the opencode
 # command through oc-tui's arg filter.
 e2e_tui_start() {
   local extra="${1:-}"
@@ -227,26 +236,35 @@ e2e_tui_start() {
   tmux send-keys -t "$E2E_TUI_SESSION" "stty -a > '$E2E_RUN_DIR/stty-before.txt'" Enter
   sleep 1
   local cmd
-  cmd="cd '$E2E_WORKDIR' && export DSH_HOME='$E2E_DSH_HOME' DSH_PERMISSION_MODE='$E2E_PERMISSION_MODE' DSH_OC_E2E_MOCK_API_KEY='$E2E_API_KEY' $extra_env && dsh --profile oc --patch '$E2E_OVERLAY' --print-logs $extra; echo DSH_EXIT=\$? > '$exit_file'"
+  # The real TUI draws on the alternate screen. dsh's `--print-logs` writes
+  # into the same terminal, so the log lines land on top of the TUI's
+  # rendering and the pane capture no longer shows the input box. The TUI
+  # runs therefore start without the flag; the dsh logs of a TUI run are
+  # read from the run's own log files instead.
+  cmd="cd '$E2E_WORKDIR' && export DSH_HOME='$E2E_DSH_HOME' DSH_PERMISSION_MODE='$E2E_PERMISSION_MODE' DSH_OC_E2E_MOCK_API_KEY='$E2E_API_KEY' $extra_env && dsh --profile oc --patch '$E2E_OVERLAY' $extra; echo DSH_EXIT=\$? > '$exit_file'"
   tmux send-keys -t "$E2E_TUI_SESSION" "$cmd" Enter
 }
 
-# Wait until the real opencode attach process appears (≤60s). Fails if dsh
+# Wait until the real opencode TUI process appears (≤60s). Fails if dsh
 # exits first or if an `opencode serve` process is found.
+#
+# OpenCode 2.x dropped the `attach` subcommand: the TUI runs as
+# `opencode --server http://127.0.0.1:<port>`, and `--mini` selects the
+# `mini` subcommand (`opencode mini --server http://127.0.0.1:<port>`).
 e2e_tui_wait_attach() {
   local deadline=$((SECONDS + 60))
   while (( SECONDS < deadline )); do
     local pane_pid dsh_pid
     pane_pid="$(tmux display-message -p -t "$E2E_TUI_SESSION" '#{pane_pid}' 2>/dev/null || true)"
     dsh_pid="$(ps -eo pid=,ppid=,args= | awk -v pane="$pane_pid" -v overlay="$E2E_OVERLAY" '
-      $2 == pane && index($0, overlay) > 0 && /dsh --profile/ { print $1; exit }
+      $2 == pane && index($0, overlay) > 0 && /--profile[= ]+oc/ { print $1; exit }
     ')"
     local attach_info attach_pid attach_line
     attach_info="$(ps -eo pid=,ppid=,args= | awk -v pid="$dsh_pid" '
       $2 == pid {
         command = $0
         sub(/^[[:space:]]*[0-9]+[[:space:]]+[0-9]+[[:space:]]+/, "", command)
-        if (command ~ /(^|[[:space:]\/])opencode[[:space:]]+attach[[:space:]]+http:\/\/127\.0\.0\.1:[0-9]+([[:space:]]|$)/) {
+        if (command ~ /(^|[[:space:]\/])opencode[[:space:]]+(mini[[:space:]]+)?--server[[:space:]]+http:\/\/127\.0\.0\.1:[0-9]+([[:space:]]|$)/) {
           print $1 "\t" command
           exit
         }
@@ -255,7 +273,7 @@ e2e_tui_wait_attach() {
       attach_pid="${attach_info%%$'\t'*}"
       attach_line="${attach_info#*$'\t'}"
       if [[ ! "$attach_pid" =~ ^[0-9]+$ ]]; then
-        echo "e2e: parsed an invalid opencode attach PID: $attach_pid" >&2
+        echo "e2e: parsed an invalid opencode TUI PID: $attach_pid" >&2
         return 1
       fi
       if ps -eo pid=,ppid=,args= | awk -v pid="$dsh_pid" '$2 == pid && /opencode serve/ { found=1 } END { exit found ? 0 : 1 }'; then
@@ -265,18 +283,18 @@ e2e_tui_wait_attach() {
       E2E_BRIDGE_URL="$(awk '{ for (i=1;i<=NF;i++) if ($i ~ /^http:\/\/127\.0\.0\.1:/) { print $i; exit } }' <<<"$attach_line")"
       E2E_TUI_DSH_PID="$dsh_pid"
       E2E_TUI_ATTACH_PID="$attach_pid"
-      echo "e2e: opencode attach -> $E2E_BRIDGE_URL"
+      echo "e2e: opencode TUI -> $E2E_BRIDGE_URL"
       e2e_tui_io_monitor_start "$attach_pid"
       return 0
     fi
     if [[ -s "$E2E_RUN_DIR/dsh-exit.txt" ]]; then
-      echo "e2e: dsh exited before attach: $(cat "$E2E_RUN_DIR/dsh-exit.txt")" >&2
+      echo "e2e: dsh exited before the TUI started: $(cat "$E2E_RUN_DIR/dsh-exit.txt")" >&2
       cat "$E2E_RUN_DIR/dsh-stderr.txt" >&2 2>/dev/null || true
       return 1
     fi
     sleep 1
   done
-  echo "e2e: opencode attach did not appear within 60s" >&2
+  echo "e2e: opencode TUI did not appear within 60s" >&2
   tmux capture-pane -p -t "$E2E_TUI_SESSION" >&2 2>/dev/null || true
   cat "$E2E_RUN_DIR/dsh-exit.txt" >&2 2>/dev/null || true
   return 1

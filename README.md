@@ -8,17 +8,17 @@ DeepSeek Harness（dsh）的 OpenCode TUI 前端：使用官方 OpenCode 终端�
 
 ## 工作方式
 
-- **界面**：官方 `opencode attach` TUI，只负责终端渲染、键盘交互和生命周期。
+- **界面**：官方 `opencode --server` TUI，只负责终端渲染、键盘交互和生命周期。
 - **后端**：dsh 负责 Agent、Session、工具、模型、权限和用户提问。
 - **桥接**：dsh-oc 在 dsh 进程内提供 OpenCode 兼容的 HTTP/SSE bridge，并启动官方 TUI。
 
 ```text
-dsh (Node) ── dsh-oc bundle ── oc-bridge (HTTP/SSE) <── opencode TUI (attach)
+dsh (Node) ── dsh-oc bundle ── oc-bridge (HTTP/SSE) <── opencode TUI (--server)
                   │
                   └─ DSH Agent/Session/Tools/LLM/Approval/Questions
 ```
 
-当前兼容基线：dsh `>=0.1.5-rc.2`、官方 opencode `1.18.18`。
+当前兼容基线：dsh `>=0.1.5-rc.2`、官方 opencode `2.1.0`。
 `main` 当前指向 GitHub prerelease [v0.2.0-rc.4](https://github.com/chiro2001/dsh-oc/releases/tag/v0.2.0-rc.4)，
 不是无标记的稳定版；npm registry 暂未发布，安装和更新走 GitHub 源。
 
@@ -100,6 +100,38 @@ shell cwd fallback。shell 卡片属于 bridge 的短期投影，不伪造 dsh a
 会话已经产生回复后，dsh 会锁定 agent preset；此时切换会显示一次
 `Agent switch locked`，请新建会话后再切换。
 
+## 浏览器访问（官方 Web UI）
+
+bridge 除了 API 也会伺服官方 OpenCode 的 Web UI，两者同一个源，所以浏览器
+直接打开 bridge 地址就能用：
+
+```bash
+dsh --profile oc
+```
+
+启动日志里的 `bridge listening on http://127.0.0.1:<port>` 就是要在浏览器里
+打开的地址。官方 Web UI 用 `location.origin` 访问 API，同源之后既不需要 CORS
+也不需要登录。
+
+Web UI 的文件是 opencode 二进制里内嵌的资源，bridge 第一次运行时把它解到
+`$DSH_HOME/opencode/web-ui/<版本>/`（当前 `2.1.0`）。bridge 只查找 opencode
+二进制，不会替你安装它；TUI 插件本来就要装这个二进制，所以 Web UI 从下一次
+启动起就出现。找不到二进制时只是没有 Web UI，API 不受影响。
+
+说明：dsh-oc 的验证环境里没有真实浏览器，Web UI 的界面交互未在这里实测；
+UI 资产能被服务、官方 OpenCode 2.1.0 客户端能订阅 bridge 的事件流，这两点
+已确认。
+
+### 相关环境变量
+
+| 变量 | 作用 |
+|---|---|
+| `DSH_OC_HOST` | bridge 的绑定地址，默认 `127.0.0.1` |
+| `DSH_OC_PORT` | bridge 的监听端口，默认随机端口 |
+| `DSH_OC_CORS` | 允许跨源访问的 origin 列表（逗号分隔），用于局域网上的浏览器 UI。默认已允许 `localhost`、`127.0.0.1`、`oc://renderer`、tauri 源和 `*.opencode.ai` |
+| `DSH_OC_WEB_UI` | 指定官方 Web UI 的目录（需要是已解开的目录，含 `index.html`）。不指定时用 `$DSH_HOME/opencode/web-ui/<版本>/` |
+| `DSH_OC_HTTP_LOG` | 设为 `1` 时把每个 HTTP 请求打到 stderr（`[bridge/http] GET /api/info`），用来在没有浏览器时看 UI 的调用模式 |
+
 ## 能力状态
 
 > 完整矩阵见 [docs/FEATURES.md](docs/FEATURES.md)，协议细节见
@@ -108,6 +140,8 @@ shell cwd fallback。shell 卡片属于 bridge 的短期投影，不伪造 dsh a
 | 能力 | 状态 |
 |---|---|
 | 会话列表/新建/续聊/fork/compact、SSE 流式消息 | ✅ |
+| 官方 OpenCode Web UI（与 API 同源，浏览器直接打开 bridge 地址） | ✅ |
+| 会话回退（revert）：stage/clear/commit、按回合的文件回滚、会话 id 不变、下一条 prompt 自动提交 | ✅ |
 | 会话标题、历史恢复和目录过滤 | ✅ |
 | 模型目录、reasoning effort、agent preset 切换 | ✅ |
 | `!` shell mode（用户授权的 OS shell、固定 bash tool card） | ✅ |
@@ -126,7 +160,8 @@ shell cwd fallback。shell 卡片属于 bridge 的短期投影，不伪造 dsh a
 
 ## 启动参数
 
-支持透传给 `opencode attach` 的参数：
+支持透传给官方 opencode TUI 的参数（dsh-oc 以 `opencode --server <bridge-url>` 启动
+TUI；`--mini` 走 `opencode mini --server <bridge-url>`）：
 
 - `--continue` / `-c`、`--session` / `-s`、`--fork`、`--dir`、`--mini`、
   `--print-logs`、`--log-level`
@@ -144,7 +179,10 @@ dsh --profile oc --dir ~/project --mini
 
 - OpenCode 的配置、数据、状态和缓存隔离在 `$DSH_HOME/opencode`；模型和凭据由 dsh
   后端管理，dsh-oc 不向 OpenCode 注入 provider/key。
-- 官方二进制锁定为 `1.18.18`；自动更新、远程模型目录抓取和 LSP 下载均关闭。
+- 官方 Web UI 与 API 共享同一个端口。bridge 默认只绑定 `127.0.0.1`，所以 Web UI
+  也只有本机能访问；改 `DSH_OC_HOST` 或 `DSH_OC_CORS` 把服务放到局域网之前，先
+  想清楚这个暴露面。
+- 官方二进制锁定为 `2.1.0`；自动更新、远程模型目录抓取和 LSP 下载均关闭。
 - shell mode 由用户显式输入 `!` 授权，继承当前 OS 用户权限与 session cwd；不宣称
   dsh approval/sandbox 保护。取消只针对当前 bridge/session 登记的精确子进程/进程组，
   不按进程名结束其它进程；POSIX 使用自有 process group，Windows 使用自有 PID
@@ -165,6 +203,10 @@ dsh --profile oc --dir ~/project --mini
   不丢失、不重复，重新进入会话后顺序正确。
 - MCP/LSP/formatter/integration/reference 等外围路由目前只提供 schema-valid stub，
   不伪造结果。
+- 会话回退（revert）的边界是排他的：被指定的消息及其之后的消息在提交时一并丢弃，
+  会话 id 保持不变（提交后对话切到 dsh 的 fork 上）。dsh 表达不了空 fork，切点在
+  第一条消息之前时返回 400；文件 diff 是首尾改动行之间的一个粗 hunk，不是完整的
+  LCS diff。
 
 ## 排障：Profile 隔离与 dsh-tui
 

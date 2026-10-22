@@ -1,9 +1,10 @@
 // session-v2 routes for the dsh-oc bridge.
 import * as R from '../router.js'
-import type { SessionMessagesResponse } from '@opencode-ai/sdk/v2/types'
+import type { SessionMessagesResponse } from '@opencode/client'
 import type { SessionSummary } from '../dsh-types.js'
 import { badRequest, notFound } from '../errors.js'
-import { convertMessagesV2, type V1MessageEntry } from '../convert/message.js'
+import { convertMessagesV2 } from '../convert/message.js'
+import type { WireMessageEntry } from '../convert/wire.js'
 import { convertSessionSummary, convertSessionSummaryV2 } from '../convert/session.js'
 import { filterGitTrackedDiffs } from '../git.js'
 import { randomUUID } from 'node:crypto'
@@ -11,9 +12,9 @@ import { toPermissionV2 } from '../convert/permission.js'
 import { toQuestionV2 } from '../convert/question.js'
 import type { RouteRegistrar } from '../routes.js'
 
-/** Convert one bridge-only v1 command card to the SDK v2 message shape. */
-function commandResultToV2(entry: V1MessageEntry): SessionMessagesResponse['data'][number] {
-  const info = entry.info as Record<string, unknown>
+/** Convert one bridge-only command card to the 2.x message shape. */
+function commandResultToV2(entry: WireMessageEntry): SessionMessagesResponse['data'][number] {
+  const info = entry.info as unknown as Record<string, unknown>
   const rawTime = info.time as { created?: unknown; completed?: unknown } | undefined
   const created = typeof rawTime?.created === 'number' ? rawTime.created : 0
   const completed = typeof rawTime?.completed === 'number' ? rawTime.completed : undefined
@@ -102,21 +103,21 @@ function commandResultToV2(entry: V1MessageEntry): SessionMessagesResponse['data
       providerID: typeof info.providerID === 'string' ? info.providerID : 'deepseek',
       ...(typeof info.variant === 'string' ? { variant: info.variant } : {}),
     },
-    content: text === '' ? [] : [{ type: 'text', id: `${String(info.id)}:0`, text }],
+    content: text === '' ? [] : [{ type: 'text', text }],
   }
 }
 
 /** Insert bridge-only cards without reordering durable converter output. */
 function mergeCommandResultsV2(
   entries: SessionMessagesResponse['data'],
-  commandResults: readonly V1MessageEntry[],
+  commandResults: readonly WireMessageEntry[],
 ): void {
   if (commandResults.length === 0) return
-  const seen = new Set(entries.map((entry) => String(entry.id)))
+  const seen = new Set(entries.map((entry) => String((entry as { id?: unknown }).id ?? '')))
   for (const source of commandResults) {
     const entry = commandResultToV2(source)
-    if (seen.has(String(entry.id))) continue
-    seen.add(String(entry.id))
+    if (seen.has(String((entry as { id?: unknown }).id ?? ''))) continue
+    seen.add(String((entry as { id?: unknown }).id ?? ''))
     const createdAt = entry.time.created
     const index = entries.findIndex((candidate) => candidate.time.created > createdAt)
     entries.splice(index === -1 ? entries.length : index, 0, entry)
@@ -130,9 +131,9 @@ function remapV2Messages(
 ): SessionMessagesResponse['data'] {
   const remapped: SessionMessagesResponse['data'] = []
   for (const message of messages) {
-    const promptId = ctx.state.promptIdForDshId(sessionId, message.id)
+    const promptId = ctx.state.promptIdForDshId(sessionId, (message as { id: string }).id)
     const assistantId = promptId === undefined
-      ? ctx.state.assistantIdForDshId(sessionId, message.id)
+      ? ctx.state.assistantIdForDshId(sessionId, (message as { id: string }).id)
       : undefined
     const surfaceId = promptId ?? assistantId
     const sessionAgent = ctx.state.sessionAgentFor(sessionId)
@@ -140,9 +141,9 @@ function remapV2Messages(
     // Synthetic command cards carry their own agent (notably the
     // msg_preset: user echo); do not overwrite that label with the session's
     // current preset while remapping history.
-    const synthetic = String(message.id).startsWith('msg_cmd:')
-      || String(message.id).startsWith('msg_preset:')
-      || String(message.id).startsWith('msg_shell:')
+    const synthetic = String((message as { id: string }).id).startsWith('msg_cmd:')
+      || String((message as { id: string }).id).startsWith('msg_preset:')
+      || String((message as { id: string }).id).startsWith('msg_shell:')
     if (surfaceId === undefined && sessionAgent === undefined) {
       remapped.push(message)
       continue
@@ -160,7 +161,7 @@ function remapV2Messages(
       const content = message.content.map((part) => ({
         ...part,
         ...(surfaceId === undefined ? {} : {
-          id: String(part.id).replaceAll(message.id, surfaceId),
+          id: String((part as { id?: unknown }).id ?? '').replaceAll((message as { id: string }).id, surfaceId),
           messageID: surfaceId,
         }),
       }))
@@ -190,7 +191,7 @@ function remapV2Messages(
       if (created !== undefined) result = { ...result, time: { ...result.time, created } }
     }
     if (surfaceId !== undefined && result.type === 'assistant') {
-      const existing = remapped.find((candidate) => candidate.id === surfaceId)
+      const existing = remapped.find((candidate) => (candidate as { id?: unknown }).id === surfaceId)
       if (existing !== undefined && 'content' in existing && Array.isArray(existing.content)
         && 'content' in result && Array.isArray(result.content)) {
         existing.content.push(...result.content)
@@ -221,7 +222,17 @@ export function registerSessionV2Routes(register: RouteRegistrar): void {
     } else {
       all = await R.cachedSessionList(ctx)
     }
-    const filtered = R.filterSessionsByDirectory(all, req.query.get('directory') ?? undefined, ctx.cwd)
+    // A session that a revert moved to a fork is published under the id the
+    // client knows, and the session it replaced drops out of the list.
+    const replaced = new Set(ctx.state.aliasedSessionIds())
+    const published = all
+      .filter((item) => !replaced.has(String(item.sessionId)))
+      .map((item) => ({ item, dshId: String(item.sessionId) }))
+    const filtered = R.filterSessionsByDirectory(
+      published.map((entry) => entry.item),
+      req.query.get('directory') ?? undefined,
+      ctx.cwd,
+    )
     const limitRaw = req.query.get('limit')
     const limit = limitRaw ? Math.max(1, Math.min(Number(limitRaw) || 100, 500)) : 100
     const cursorRaw = req.query.get('cursor')
@@ -232,13 +243,20 @@ export function registerSessionV2Routes(register: RouteRegistrar): void {
     R.recordSessionSummaries(ctx, page)
     await R.warmListTitles(ctx, page)
     return R.json(200, {
-      data: page.map((item) => convertSessionSummaryV2(item, {
-        cwd: ctx.state.sessionDirectories.get(String(item.sessionId)) ?? ctx.cwd,
-        title: ctx.state.sessionTitleFor(String(item.sessionId)),
-        ...(ctx.state.sessionAgentFor(String(item.sessionId)) === undefined
-          ? {}
-          : { agent: ctx.state.sessionAgentFor(String(item.sessionId)) }),
-      })),
+      data: page.map((item) => {
+        const dshId = String(item.sessionId)
+        const opencodeId = ctx.state.openCodeIdFor(dshId)
+        return {
+          ...convertSessionSummaryV2(item, {
+            cwd: ctx.state.sessionDirectories.get(dshId) ?? ctx.cwd,
+            title: ctx.state.sessionTitleFor(dshId),
+            ...(ctx.state.sessionAgentFor(dshId) === undefined
+              ? {}
+              : { agent: ctx.state.sessionAgentFor(dshId) }),
+          }),
+          id: opencodeId,
+        }
+      }),
       cursor: {
         ...(nextOffset < filtered.length ? { next: R.encodeSessionCursor(nextOffset) } : {}),
         ...(offset > 0 ? { previous: R.encodeSessionCursor(Math.max(0, offset - limit)) } : {}),
@@ -269,7 +287,7 @@ export function registerSessionV2Routes(register: RouteRegistrar): void {
     })))
   })
 
-  register('POST', '/api/session', 'json', (req, ctx) => R.createSession(req, ctx, true))
+  register('POST', '/api/session', 'json', (req, ctx) => R.createSession(req, ctx))
 
   register('GET', '/api/session/active', 'json', async (_req, ctx) => {
     const id = ctx.state.currentSessionId
@@ -293,18 +311,35 @@ export function registerSessionV2Routes(register: RouteRegistrar): void {
     return R.json(503, { name: 'ServiceUnavailableError', message: 'session still busy' })
   })
 
-  register('POST', '/api/session/:sessionID/fork', 'json', (req, ctx) => R.forkSession(req, ctx, true))
+  register('POST', '/api/session/:sessionID/fork', 'json', (req, ctx) => R.forkSession(req, ctx))
 
   register('POST', '/api/session/:sessionID/compact', 'json', async (req, ctx) => {
     const id = req.params.sessionID as string
     await R.runCompactCommand(ctx, id)
-    return R.json(204)
+    // The v2 client unwraps `data` from the compaction inbox item.
+    return R.json(200, {
+      data: {
+        id: `msg_${randomUUID()}`,
+        sessionID: id,
+        time: { created: Date.now() },
+        type: 'compaction',
+        payload: {},
+        delivery: 'queue',
+      },
+    })
   })
 
   register('POST', '/api/session/:sessionID/prompt', 'json', async (req, ctx) => {
     const id = req.params.sessionID as string
     const body = R.bodyAsRecord(req.body)
-    const content = R.parsePromptParts(body.parts, ctx.cwd)
+    // OpenCode commits a staged revert when the next prompt arrives: the
+    // transcript is cut at the boundary before the new turn starts.
+    await R.commitStagedRevert(ctx, id)
+    // The v2 client sends `{ text, files, agents, skills }`; the v1 `parts`
+    // array stays accepted so a v1-shaped caller keeps working.
+    const content = Array.isArray(body.parts)
+      ? R.parsePromptParts(body.parts, ctx.cwd)
+      : R.parseV2PromptInput(body, ctx.cwd)
     const slash = R.slashPromptCapture(content)
     if (slash !== undefined) {
       const outcome = await R.runSlashCommand(ctx, id, slash)
@@ -313,17 +348,21 @@ export function registerSessionV2Routes(register: RouteRegistrar): void {
         data: {
           id: `msg_${randomUUID()}`,
           sessionID: id,
-          prompt: { parts: content },
+          time: { created: Date.now() },
+          type: 'user',
+          payload: { text: promptText(content) },
           delivery: 'queue',
-          timeCreated: Date.now(),
-          admittedSeq: 0,
         },
       })
     }
-    const promptUserID = typeof body.messageID === 'string' && body.messageID.length > 0
-      ? body.messageID
-      : `msg_${randomUUID()}`
+    // The v2 client names the message `id`; the v1 TUI used `messageID`.
+    const rawPromptID = typeof body.id === 'string' && body.id.length > 0
+      ? body.id
+      : typeof body.messageID === 'string' && body.messageID.length > 0
+        ? body.messageID
+        : `msg_${randomUUID()}`
     const createdAt = Date.now()
+    const promptUserID = rawPromptID
     ctx.state.registerPromptMessageId(id, promptUserID, createdAt)
     const assistantID = `msg_${randomUUID()}`
     ctx.state.registerAssistantIdForUser(id, promptUserID, assistantID)
@@ -338,11 +377,15 @@ export function registerSessionV2Routes(register: RouteRegistrar): void {
       promptText(content),
       createdAt,
       R.promptModelRef(ctx, id, req.body),
+      body.delivery === 'queue' ? 'queue' : 'steer',
     )
+    // The v2 client picks the delivery; `steer` reaches a running turn and
+    // `queue` waits for the current one to finish.
+    const delivery = body.delivery === 'queue' ? 'queue' : 'steer'
     await R.rpc(ctx, 'session.prompt', {
       sessionId: R.sid(id),
       requestId: promptUserID,
-      mode: 'steer',
+      mode: delivery,
       content,
     })
     ctx.state.markInput()
@@ -351,10 +394,10 @@ export function registerSessionV2Routes(register: RouteRegistrar): void {
       data: {
         id: promptUserID,
         sessionID: id,
-        prompt: { parts: content },
-        delivery: 'queue',
-        timeCreated: Date.now(),
-        admittedSeq: 0,
+        time: { created: createdAt },
+        type: 'user',
+        payload: { text: promptText(content) },
+        delivery,
       },
     })
   })
@@ -387,8 +430,12 @@ export function registerSessionV2Routes(register: RouteRegistrar): void {
 
   register('POST', '/api/session/:sessionID/interrupt', 'json', async (req, ctx) => {
     const id = req.params.sessionID as string
+    // An owned `!` shell runs outside the model turn, so the interrupt has to
+    // stop its child process as well.
+    R.abortShellCommand(ctx, id)
     await R.rpc(ctx, 'session.cancel', { sessionId: R.sid(id) })
-    return R.json(204)
+    // The v2 client reads `interrupted` from the response body.
+    return R.json(200, { interrupted: true })
   })
 
   register('GET', '/api/session/:sessionID/message', 'json', async (req, ctx) => {
@@ -413,8 +460,8 @@ export function registerSessionV2Routes(register: RouteRegistrar): void {
       },
       entries.map((entry) => entry.view),
     )
-    mergeCommandResultsV2(data, ctx.state.commandResultsFor(id))
-    const remapped = remapV2Messages(ctx, id, data)
+    mergeCommandResultsV2(data as unknown as SessionMessagesResponse['data'], ctx.state.commandResultsFor(id))
+    const remapped = remapV2Messages(ctx, id, data as unknown as SessionMessagesResponse['data'])
     R.mergePendingAssistantV2(ctx, id, remapped as unknown as Array<Record<string, unknown>>)
     const response: SessionMessagesResponse = {
       data: req.query.get('order') === 'desc' ? remapped.reverse() : remapped,
@@ -464,7 +511,7 @@ export function registerSessionV2Routes(register: RouteRegistrar): void {
       ? null
       : oldest
     return R.json(200, {
-      data: remapV2Messages(ctx, id, withSeq.map((entry) => entry.message)),
+      data: remapV2Messages(ctx, id, withSeq.map((entry) => entry.message) as any) as any,
       hasMore: history.hasMore,
       next,
     })
@@ -508,9 +555,9 @@ export function registerSessionV2Routes(register: RouteRegistrar): void {
       },
       entries.map((entry) => entry.view),
     )
-    const remapped = remapV2Messages(ctx, id, data)
+    const remapped = remapV2Messages(ctx, id, data as unknown as SessionMessagesResponse['data'])
     R.mergePendingAssistantV2(ctx, id, remapped as unknown as Array<Record<string, unknown>>)
-    const found = remapped.find((message) => message.id === messageID)
+    const found = remapped.find((message) => (message as { id?: unknown }).id === messageID)
     if (found === undefined) throw notFound('message not found', { messageID })
     return R.json(200, { data: found })
   })
@@ -518,7 +565,8 @@ export function registerSessionV2Routes(register: RouteRegistrar): void {
   register('GET', '/api/session/:sessionID/diff', 'json', async (req, ctx) => {
     const id = req.params.sessionID as string
     const history = await R.cachedSessionHistory(ctx, id)
-    return R.json(200, filterGitTrackedDiffs(ctx.cwd, R.historyFileDiffs(history)))
+    // The v2 client unwraps `data` from the diff list.
+    return R.json(200, { data: filterGitTrackedDiffs(ctx.cwd, R.historyFileDiffs(history)) })
   })
 
   register('GET', '/api/session/:sessionID/permission', 'json', async (req, ctx) => {
@@ -556,6 +604,72 @@ export function registerSessionV2Routes(register: RouteRegistrar): void {
   register('POST', '/api/session/:sessionID/question/:requestID/reject', 'json', async (req, ctx) => {
     const requestID = req.params.requestID as string
     await R.questionReject(ctx, requestID)
+    return R.json(204)
+  })
+
+  // ---- revert (rewind via sessionController.fork) ----
+  register('POST', '/api/session/:sessionID/revert/stage', 'json', async (req, ctx) => {
+    const id = req.params.sessionID as string
+    const body = R.bodyAsRecord(req.body)
+    const messageID = typeof body.messageID === 'string' ? body.messageID : ''
+    if (messageID.length === 0) {
+      throw badRequest('revert stage needs a message id', { sessionID: id })
+    }
+    // The boundary is exclusive: the named message and everything after it
+    // disappear when the revert commits. The files the turns after the
+    // boundary changed are rolled back right away, as OpenCode does, so the
+    // workspace already shows the state the revert restores.
+    const location = await R.locateMessage(ctx, id, messageID)
+    // OpenCode rolls back the files of the assistant messages that come
+    // after the boundary. A user prompt is followed by its own turn's
+    // assistant reply, so that turn rolls back too; an assistant reply is
+    // the last message of its turn, so it does not.
+    const boundary = {
+      turn: location.turn,
+      includeTurn: location.role === 'user',
+    }
+    // The file snapshots are keyed by the dsh session the turn ran in, so
+    // they are looked up under the session the opencode id points at.
+    const dshId = ctx.state.resolveSessionId(id)
+    // The diffs are computed before the rollback: afterwards the files
+    // already carry the restored content and the diff would be empty.
+    const files = ctx.api.rewind?.filesAfter(dshId, boundary) ?? []
+    // Roll the files back right away, as OpenCode does: the workspace shows
+    // the state the revert restores while the boundary is still staged.
+    const restored = ctx.api.rewind?.restoreFilesAfter(dshId, boundary) ?? []
+    if (restored.length > 0) {
+      ctx.log(`[bridge/revert] rolled ${restored.length} file(s) back for session ${id}`)
+    }
+    ctx.state.stageRevert(id, { messageID, turn: boundary.turn, includeTurn: boundary.includeTurn, files })
+    const revert = {
+      messageID,
+      ...(files.length === 0 ? {} : { files }),
+    }
+    R.publishV2Event(ctx, 'session.revert.staged', { sessionID: id, revert }, id)
+    return R.json(200, { data: revert })
+  })
+
+  // The v2 client clears a staged revert with DELETE on the revert resource.
+  register('DELETE', '/api/session/:sessionID/revert', 'json', async (req, ctx) => {
+    const id = req.params.sessionID as string
+    const staged = ctx.state.revertBoundary(id)
+    ctx.state.clearRevert(id)
+    if (staged === undefined) return R.json(204)
+    // A cleared revert puts the rolled-back files back.
+    const restored = ctx.api.rewind?.undoRestore(ctx.state.resolveSessionId(id)) ?? []
+    if (restored.length > 0) {
+      ctx.log(`[bridge/revert] put ${restored.length} file(s) back for session ${id}`)
+    }
+    R.publishV2Event(ctx, 'session.revert.cleared', { sessionID: id }, id)
+    return R.json(204)
+  })
+
+  register('POST', '/api/session/:sessionID/revert/commit', 'json', async (req, ctx) => {
+    const id = req.params.sessionID as string
+    // A failed fork leaves the transcript untouched and the boundary staged,
+    // so the error propagates and the client knows the commit did not
+    // happen.
+    await R.commitStagedRevert(ctx, id)
     return R.json(204)
   })
 

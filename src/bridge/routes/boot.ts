@@ -1,6 +1,6 @@
 // boot routes for the dsh-oc bridge.
 import * as R from '../router.js'
-import { convertToProviderCatalog, convertToV1Providers, convertToV2Models, convertToV2Providers } from '../convert/model.js'
+import { convertToV2Models, convertToV2Providers } from '../convert/model.js'
 import { OPENCODE_VERSION, projectIdFor } from '../convert/common.js'
 import { permissionActionFromTool } from '../convert/permission.js'
 import { toPermissionV2 } from '../convert/permission.js'
@@ -9,61 +9,14 @@ import { notFound } from '../errors.js'
 import type { RouteRegistrar } from '../routes.js'
 
 export function registerBootRoutes(register: RouteRegistrar): void {
-  // ---- v1 boot / catalog routes ----
-  register('GET', '/path', 'json', async (_req, ctx) => {
-    const directory = ctx.cwd
-    return R.json(200, {
-      home: directory,
-      state: 'ready',
-      config: '',
-      worktree: directory,
-      directory,
-      path: directory,
-    })
-  })
-
-  register('GET', '/project/current', 'json', async (_req, ctx) => R.json(200, {
-    id: projectIdFor(ctx.cwd),
-    worktree: ctx.cwd,
-    time: { created: 0 },
+  // ---- v2 boot / catalog routes ----
+  register('GET', '/api/info', 'json', async () => R.json(200, {
+    version: OPENCODE_VERSION,
+    pid: process.pid,
+    urls: [],
+    paths: { tmp: (process.env.TMPDIR ?? process.env.TMP ?? '/tmp') },
   }))
 
-  register('GET', '/project/global/directories', 'json', async (_req, ctx) => R.json(200, [
-    { directory: ctx.cwd },
-  ]))
-
-  register('GET', '/config', 'json', async () => R.json(200, { autoupdate: false }))
-
-  register('GET', '/config/providers', 'json', async (_req, ctx) => {
-    const groups = await R.modelGroups(ctx)
-    return R.json(200, { providers: convertToV1Providers(groups), default: {} })
-  })
-
-  register('GET', '/provider', 'json', async (_req, ctx) => {
-    const groups = await R.modelGroups(ctx)
-    return R.json(200, convertToProviderCatalog(groups))
-  })
-
-  register('GET', '/provider/auth', 'json', async () => R.json(200, {}))
-
-  register('GET', '/agent', 'json', async (_req, ctx) => R.json(200, await R.v1AgentList(ctx)))
-  // `/preset` stays advertised as a server command: the 1.18.18 TUI opens a
-  // slash popup for any `/` input, so the first Enter completes to `/preset `
-  // and the second Enter executes through `POST /session/:id/command`. The
-  // prompt routes below additionally capture `/preset` typed with a trailing
-  // space (or after Esc), so every path ends with a visible SSE result.
-  register('GET', '/command', 'json', async (req, ctx) => R.json(200, [
-    R.PRESET_COMMAND_V1,
-    R.GOAL_COMMAND_V1,
-    R.HELP_COMMAND_V1,
-    ...(await R.skillCommandsV1(ctx, req.query.get('directory') ?? undefined)),
-  ]))
-  register('GET', '/skill', 'json', async (req, ctx) => R.json(200, await R.skillList(ctx, req.query.get('directory') ?? undefined)))
-  for (const bare of ['/reference', '/integration']) {
-    register('GET', bare, 'json', async () => R.json(200, []))
-  }
-
-  // ---- v2 boot / catalog routes ----
   register('GET', '/api/location', 'json', async (_req, ctx) => R.json(200, R.locationInfo(ctx)))
 
   register('GET', '/api/agent', 'json', async (_req, ctx) => R.json(200, {
@@ -84,9 +37,8 @@ export function registerBootRoutes(register: RouteRegistrar): void {
     location: R.locationInfo(ctx),
     data: await R.skillList(ctx, req.query.get('directory') ?? undefined),
   }))
-  for (const bare of ['/api/reference', '/api/integration']) {
-    register('GET', bare, 'json', async (_req, ctx) => R.json(200, R.v2LocationBody(ctx)))
-  }
+  register('GET', '/api/reference', 'json', async (_req, ctx) => R.json(200, R.v2LocationBody(ctx)))
+  register('GET', '/api/integration', 'json', async (_req, ctx) => R.json(200, R.v2LocationBody(ctx)))
 
   register('GET', '/api/model', 'json', async (_req, ctx) => {
     const groups = await R.modelGroups(ctx)
@@ -134,6 +86,29 @@ export function registerBootRoutes(register: RouteRegistrar): void {
       throw notFound('saved permission not found', { permissionID })
     }
     return R.json(204)
+  })
+
+  // The 2.1 client can narrow a remembered grant.
+  register('PATCH', '/api/permission/saved/:permissionID', 'json', async (req, ctx) => {
+    const permissionID = req.params.permissionID as string
+    const body = R.bodyAsRecord(req.body)
+    const saved = ctx.state.updateSavedPermission(permissionID, {
+      ...(typeof body.action === 'string' ? { action: body.action } : {}),
+      ...(typeof body.resource === 'string' ? { resource: body.resource } : {}),
+    })
+    if (saved === undefined) {
+      throw notFound('saved permission not found', { permissionID })
+    }
+    return R.json(200, {
+      data: {
+        id: ctx.state.savedPermissionId(saved),
+        projectID: projectIdFor(ctx.cwd),
+        action: permissionActionFromTool(saved.toolName),
+        resource: saved.toolName,
+        sessionID: saved.sessionId,
+        grantedAt: saved.grantedAt,
+      },
+    })
   })
 
   register('GET', '/api/health', 'json', async () => R.json(200, { healthy: true }))

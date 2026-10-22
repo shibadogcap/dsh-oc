@@ -22,11 +22,40 @@ export interface BridgeServerHandle {
 
 const MAX_BODY_BYTES = 1024 * 1024
 
-const CORS_HEADERS = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET, POST, PATCH, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Requested-With, Last-Event-ID',
-  'Access-Control-Max-Age': '86400',
+/**
+ * The CORS policy of the official opencode server.
+ *
+ * The official server answers a browser's cross-origin request with the
+ * request's own origin (never `*`) and allows credentials, so a web UI can
+ * talk to it directly. Answering `*` instead breaks every credentialed
+ * request: the browser rejects it with "credentialed request requires
+ * Access-Control-Allow-Origin '<origin>'".
+ *
+ * `http://localhost:<port>` and `http://127.0.0.1:<port>` are always
+ * allowed, plus the origins named in `DSH_OC_CORS` (comma separated) for
+ * a LAN address.
+ */
+export function isAllowedCorsOrigin(origin: string | undefined, extra: readonly string[] = []): boolean {
+  if (origin === undefined || origin.length === 0) return true
+  if (origin.startsWith('http://localhost:')) return true
+  if (origin.startsWith('http://127.0.0.1:')) return true
+  if (origin.startsWith('oc://renderer')) return true
+  if (origin === 'tauri://localhost' || origin === 'http://tauri.localhost' || origin === 'https://tauri.localhost') return true
+  if (/^https:\/\/([a-z0-9-]+\.)*opencode\.ai$/.test(origin)) return true
+  return extra.includes(origin)
+}
+
+/** The CORS headers for one request. */
+export function corsHeaders(origin: string | undefined, extra: readonly string[] = []): Record<string, string> {
+  const allowed = isAllowedCorsOrigin(origin, extra)
+  if (!allowed) return {}
+  return {
+    'Access-Control-Allow-Origin': origin ?? '*',
+    'Access-Control-Allow-Methods': 'GET, POST, PATCH, PUT, DELETE, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Requested-With, Last-Event-ID',
+    'Access-Control-Allow-Credentials': 'true',
+    'Access-Control-Max-Age': '86400',
+  }
 }
 
 /**
@@ -35,12 +64,13 @@ const CORS_HEADERS = {
  */
 export async function startBridgeServer(
   router: BridgeRouter,
-  options: { host?: string } = {},
+  options: { host?: string; port?: number; corsOrigins?: readonly string[] } = {},
 ): Promise<BridgeServerHandle> {
   const host = options.host ?? '127.0.0.1'
+  const listenPort = options.port ?? 0
   const sockets = new Set<import('node:net').Socket>()
   const server = http.createServer((req, res) => {
-    void handleRequest(router, req, res).catch((error: unknown) => {
+    void handleRequest(router, req, res, options.corsOrigins ?? []).catch((error: unknown) => {
       sendError(res, error instanceof HttpError
         ? error
         : internalError(error instanceof Error ? error.message : String(error)))
@@ -61,7 +91,7 @@ export async function startBridgeServer(
     }
     server.once('error', onError)
     server.once('listening', onListening)
-    server.listen(0, host)
+    server.listen(listenPort, host)
   })
   const address = server.address() as AddressInfo
   const port = address.port
@@ -85,16 +115,26 @@ async function handleRequest(
   router: BridgeRouter,
   req: IncomingMessage,
   res: ServerResponse,
+  corsOrigins: readonly string[] = [],
 ): Promise<void> {
   const method = req.method ?? 'GET'
   const url = new URL(req.url ?? '/', 'http://127.0.0.1')
   const pathname = url.pathname
-  res.setHeader('Access-Control-Allow-Origin', '*')
+  const origin = req.headers.origin
+  const cors = corsHeaders(typeof origin === 'string' ? origin : undefined, corsOrigins)
+  for (const [key, value] of Object.entries(cors)) res.setHeader(key, value)
 
   if (method === 'OPTIONS') {
-    res.writeHead(204, CORS_HEADERS)
+    res.writeHead(204, cors)
     res.end()
     return
+  }
+
+  // `DSH_OC_HTTP_LOG=1` traces every request, which is how a browser UI's
+  // call pattern is checked without a browser in the loop. The line is
+  // written when the request arrives, so a long-lived stream shows up too.
+  if (process.env.DSH_OC_HTTP_LOG === '1') {
+    process.stderr.write(`[bridge/http] ${method} ${pathname}\n`)
   }
 
   let body: unknown
@@ -104,6 +144,17 @@ async function handleRequest(
 
   const route = router.match(method, pathname)
   if (!route) {
+    // The official opencode web UI is a single page application: a path it
+    // does not know is still the shell. The API keeps its own 404, and so do
+    // the paths the official server reserves for the API.
+    const isApiPath = pathname === '/api'
+      || pathname.startsWith('/api/')
+      || pathname.startsWith('/auth/')
+      || pathname === '/openapi.json'
+    if (!isApiPath && router.serveWebUi !== undefined && (method === 'GET' || method === 'HEAD')) {
+      const served = router.serveWebUi({ method, pathname, query: url.searchParams, params: {}, headers: req.headers, body: undefined }, res)
+      if (served) return
+    }
     throw notImplemented(`${method} ${pathname} is not implemented by oc-bridge`)
   }
 
@@ -146,6 +197,12 @@ async function readBody(req: IncomingMessage): Promise<unknown> {
   }
 }
 
+/**
+ * Write the response body.
+ *
+ * The CORS headers are already on the response (they depend on the request's
+ * origin), so they are not repeated here: `writeHead` would replace them.
+ */
 function sendResult(
   res: ServerResponse,
   status: number,
@@ -156,7 +213,6 @@ function sendResult(
   if (raw !== undefined) {
     const data = typeof raw === 'string' ? raw : raw.toString('utf8')
     res.writeHead(status, {
-      ...CORS_HEADERS,
       ...headers,
       'Content-Type': headers?.['Content-Type'] ?? 'text/plain; charset=utf-8',
       'Content-Length': Buffer.byteLength(data),
@@ -165,13 +221,12 @@ function sendResult(
     return
   }
   if (status === 204 || status === 304 || body === undefined) {
-    res.writeHead(status, { ...CORS_HEADERS, ...headers, 'Content-Length': '0' })
+    res.writeHead(status, { ...headers, 'Content-Length': '0' })
     res.end()
     return
   }
   const data = JSON.stringify(body)
   res.writeHead(status, {
-    ...CORS_HEADERS,
     ...headers,
     'Content-Type': 'application/json',
     'Content-Length': Buffer.byteLength(data),

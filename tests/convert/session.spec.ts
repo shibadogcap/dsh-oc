@@ -13,10 +13,12 @@ function summary(overrides: Partial<SessionSummary> = {}): SessionSummary {
     sessionId: 'session-1' as never,
     updatedAt: 2000,
     running: false,
+    agentAvailable: false,
     blank: false,
     cwd: '/work',
     agentPreset: 'build',
     projections: {
+      kind: 'sequenced',
       asOfSeq: 1,
       values: { title: 'My Session' } as never,
     },
@@ -33,7 +35,7 @@ describe('convert/session', () => {
     expect(session.projectID).toMatch(/^[0-9a-f]{16}$/)
     expect(session.title).toBe('My Session')
     expect(session.agent).toBe('build')
-    expect(session.version).toBe('1.18.18')
+    expect(session.version).toBe('2.1.0')
     expect(session.time.created).toBe(1500)
     expect(session.time.updated).toBe(2000)
   })

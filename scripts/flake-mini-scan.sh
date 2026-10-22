@@ -39,7 +39,7 @@ FAILED=0
 report_external_orphans() {
   local pids
   pids="$(ps -eo ppid=,pid=,args= | awk '
-    $1 == 1 && /opencode attach http:\/\/127\.0\.0\.1:/ { print $2 }
+    $1 == 1 && /opencode --server http:\/\/127\.0\.0\.1:/ { print $2 }
   ' | xargs 2>/dev/null || true)"
   if [[ -n "$pids" ]]; then
     echo "flake-mini-scan: observe-only warning: pre-existing orphan opencode PID(s): $pids" >&2

@@ -24,7 +24,7 @@ printf '%s\n' \
   '#!/usr/bin/env bash' \
   'case "${1:-}" in' \
   '  --version) printf "%s\\n" "0.0.0"; exit 0 ;;' \
-  '  attach) exit 1 ;;' \
+  '  --server) exit 1 ;;' \
   'esac' \
   'exit 1' > "$WRONG_BIN"
 chmod +x "$WRONG_BIN"
@@ -51,7 +51,7 @@ echo "  dsh exit: $EXIT_LINE"
 
 tmux capture-pane -p -S -300 -t "$E2E_TUI_SESSION" > "$E2E_RUN_DIR/tui-version-lock.txt"
 if ! grep -qa "reports version 0.0.0" "$E2E_RUN_DIR/tui-version-lock.txt" \
-  || ! grep -qa "expected 1.18.18" "$E2E_RUN_DIR/tui-version-lock.txt" \
+  || ! grep -qa "expected 2.1.0" "$E2E_RUN_DIR/tui-version-lock.txt" \
   || ! grep -qa "DSH_OC_OPENCODE_BIN" "$E2E_RUN_DIR/tui-version-lock.txt"; then
   echo "e2e: version-lock error message missing from pane" >&2
   tail -80 "$E2E_RUN_DIR/tui-version-lock.txt" >&2 || true

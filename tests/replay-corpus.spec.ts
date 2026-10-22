@@ -6,7 +6,6 @@ import type { SessionEvent } from '@deepseek-ai/dsh-session/types'
 import { InteractionState } from '../src/bridge/state.js'
 import { MuxEventTranslator, type BridgeGlobalEvent } from '../src/bridge/events.js'
 import {
-  convertMessagesV1,
   convertMessagesV2,
   type MessageConvertOptions,
 } from '../src/bridge/convert/message.js'
@@ -62,20 +61,6 @@ function normParts(parts: Array<Record<string, unknown>>): NormPart[] {
   })
 }
 
-function normV1(entries: Array<{
-  info: { id: string; role: string; parentID?: string }
-  parts: Array<Record<string, unknown>>
-}>): NormMessage[] {
-  const ids = entries.map((entry) => entry.info.id)
-  return entries.map((entry) => ({
-    role: entry.info.role,
-    parent: entry.info.parentID == null
-      ? null
-      : ids.indexOf(entry.info.parentID) === -1 ? null : ids.indexOf(entry.info.parentID),
-    parts: normParts(entry.parts),
-  }))
-}
-
 function normV2(messages: Array<{
   type: string
   text?: string
@@ -88,10 +73,6 @@ function normV2(messages: Array<{
       ? [{ type: 'text', text: message.text ?? '' }]
       : normParts(message.content ?? []),
   }))
-}
-
-function withoutParent(messages: NormMessage[]): NormMessage[] {
-  return messages.map((message) => ({ ...message, parent: null }))
 }
 
 function replay(events: SessionEvent[]) {
@@ -141,8 +122,7 @@ describe('replay corpus (experiment 1c)', () => {
         cwd: '/work',
         defaultModel: { providerID: 'deepseek', modelID: 'mock-model' },
       }
-      const v1 = convertMessagesV1(events, opts)
-      const v2 = convertMessagesV2(events, opts)
+      const durable = convertMessagesV2(events, opts)
 
       // Tool calls must be paired with results, and every durable tool part
       // must reach a terminal state.
@@ -155,21 +135,16 @@ describe('replay corpus (experiment 1c)', () => {
         .map((event) => String(((event.data as { message?: { source?: { callId?: unknown } } }).message?.source)?.callId ?? ''))
         .sort()
       expect(results).toEqual(calls)
-      for (const entry of v1) {
-        for (const part of entry.parts) {
+      for (const message of durable) {
+        if (message.type !== 'assistant') continue
+        for (const part of message.content) {
           if (part.type === 'tool') {
-            expect(['completed', 'error']).toContain(
-              String((part as { state?: { status?: unknown } }).state?.status ?? ''),
-            )
+            expect(['completed', 'error']).toContain(part.state.status)
           }
         }
       }
 
-      const v1Norm = normV1(v1 as Array<{
-        info: { id: string; role: string; parentID?: string }
-        parts: Array<Record<string, unknown>>
-      }>)
-      const v2Norm = normV2(v2 as Array<{ type: string; text?: string; content?: Array<Record<string, unknown>> }>)
+      const durableNorm = normV2(durable as Array<{ type: string; text?: string; content?: Array<Record<string, unknown>> }>)
 
       // Live event invariants: every tool call reaches a terminal part state.
       const toolStatuses = new Map<string, string[]>()
@@ -207,28 +182,25 @@ describe('replay corpus (experiment 1c)', () => {
       }
 
       if (fixture.equivalence) {
-        // Both durable surfaces must agree exactly (v2 carries no parent).
-        expect(withoutParent(v1Norm)).toEqual(withoutParent(v2Norm))
-        // Live stream must close at least as many assistant messages as the
-        // durable fold, and exactly as many now that multi-tool turns
-        // complete every pending tool-call assistant at turn/end (ids differ:
-        // live keeps msg_pending ids without the bridge's surface-id remap).
-        const durableAssistants = v1.filter((entry) => entry.info.role === 'assistant').length
+        // The durable fold and the live stream must close the same number of
+        // assistant messages (ids differ: live keeps the msg_pending ids
+        // without the bridge's surface-id remap).
+        const durableAssistants = durable.filter((message) => message.type === 'assistant').length
         expect(completedAssistantCount).toBe(durableAssistants)
       } else if (fixture.features.includes('interrupt')) {
-        // Interrupted turn: both surfaces keep a partial assistant; the live
-        // translator additionally closes it at turn/end.
-        expect(v1Norm.filter((message) => message.role === 'assistant').length).toBeGreaterThan(0)
+        // Interrupted turn: the durable fold keeps a partial assistant; the
+        // live translator additionally closes it at turn/end.
+        expect(durableNorm.filter((message) => message.role === 'assistant').length).toBeGreaterThan(0)
         expect(completedAssistantCount).toBeGreaterThan(0)
       } else if (fixture.features.includes('goal')) {
-        expect(v1Norm.some((message) =>
+        expect(durableNorm.some((message) =>
           message.role === 'assistant' && message.parts.some((part) => part.text.includes('synthetic goal'))))
           .toBe(true)
         expect(sawTodoUpdate).toBe(true)
       } else if (fixture.features.includes('unfinished-turn')) {
         // No turn/end: durable keeps an open partial assistant and live
         // keeps the provisional one without a completion.
-        const partial = v1Norm.filter((message) => message.role === 'assistant')
+        const partial = durableNorm.filter((message) => message.role === 'assistant')
         expect(partial.length).toBeGreaterThan(0)
         expect(partial.some((message) => message.parts.some((part) => part.text.length > 0))).toBe(true)
         expect(completedAssistantCount).toBe(0)
@@ -306,11 +278,9 @@ describe('replay corpus (experiment 1c)', () => {
       cwd: '/work',
       defaultModel: { providerID: 'deepseek', modelID: 'mock-model' },
     }
-    const v1 = convertMessagesV1(events, opts)
-    const v2 = convertMessagesV2(events, opts)
-    expect(v1.filter((entry) => entry.info.role === 'assistant').length).toBe(1)
-    expect(v2.filter((message) => message.type === 'assistant').length).toBe(1)
-    const assistant = v2.find((message) => message.type === 'assistant')
+    const durable = convertMessagesV2(events, opts)
+    expect(durable.filter((message) => message.type === 'assistant').length).toBe(1)
+    const assistant = durable.find((message) => message.type === 'assistant')
     expect(String((assistant?.content?.[0] as { text?: string } | undefined)?.text ?? '').length)
       .toBe(10_000)
     const completed = all.filter((event) => {

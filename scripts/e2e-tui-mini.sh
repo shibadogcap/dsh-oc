@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Mini attach e2e: dsh --profile oc --mini boots the real opencode TUI in
+# Mini TUI e2e: dsh --profile oc --mini boots the real opencode TUI in
 # minimal mode, renders a recognizable prompt and exits with either a graceful
 # status or the expected SIGINT status after triple C-c.
 set -euo pipefail
@@ -21,7 +21,7 @@ export DSH_OC_E2E_CHUNK_DELAY_MS=40
 export DSH_OC_E2E_CHUNK_SIZE=4
 e2e_new_run "tui-mini" "danger-full-access" "success" "1"
 
-echo "== boot real opencode attach with --mini =="
+echo "== boot real opencode TUI with --mini =="
 e2e_tui_start "--mini"
 e2e_tui_wait_attach
 
@@ -32,7 +32,7 @@ while (( SECONDS < deadline )); do
   # The DSH OC brand (printed before --mini) contains "OpenCode" in its
   # subtitle; only "Ask anything" proves the mini interface is ready for
   # keyboard input.
-  for pattern in "Ask anything" "1.18.18" "DSH OC"; do
+  for pattern in "Ask anything" "2.1.0" "DSH OC"; do
     if grep -qa "$pattern" "$E2E_RUN_DIR/tui-mini.txt"; then
       MINI_HINT="$pattern"
       break 2
@@ -58,8 +58,9 @@ tmux send-keys -t "$E2E_TUI_SESSION" "mini reply test" Enter
 REPLY_HINT=""
 deadline=$((SECONDS + 60))
 while (( SECONDS < deadline )); do
-  for sid in $(curl -s "$E2E_BRIDGE_URL/session" | jq -r '.[].id'); do
-    local_text="$(curl -s "$E2E_BRIDGE_URL/session/$sid/message" | jq -r '[.. | objects | select(has("text")) | .text] | join(" ")' 2>/dev/null || true)"
+  for sid in $(curl -s "$E2E_BRIDGE_URL/api/session" | jq -r '.data[].id'
+); do
+    local_text="$(curl -s "$E2E_BRIDGE_URL/api/session/$sid/message" | jq -r '[.. | objects | select(has("text")) | .text] | join(" ")' 2>/dev/null || true)"
     if [[ "$local_text" == *"mini reply test"* && "$local_text" == *"mock response recovered"* ]]; then
       REPLY_HINT="mini reply + mock response"
       break 2

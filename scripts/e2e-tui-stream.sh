@@ -25,7 +25,7 @@ export DSH_OC_E2E_CHUNK_SIZE=2
 
 e2e_new_run "tui-stream" "danger-full-access" "slow_success,slow_success,slow_success,slow_success" "1"
 
-echo "== boot dsh + real opencode attach =="
+echo "== boot dsh + real opencode TUI =="
 e2e_tui_start ""
 e2e_tui_wait_attach
 TUI_URL="$E2E_BRIDGE_URL"
@@ -131,8 +131,8 @@ fi
 echo "  complete success text visible"
 
 echo "== assert real message duration in API history =="
-SESSION_ID="$(curl -s "$TUI_URL/session" | jq -er '.[-1].id')"
-DURATIONS="$(curl -s "$TUI_URL/session/$SESSION_ID/message" | jq -c '[.[] | select(.info.role == "assistant" and .info.time.completed != null) | .info.time.completed - .info.time.created]')"
+SESSION_ID="$(curl -s "$TUI_URL/api/session" | jq -er '.data[-1].id')"
+DURATIONS="$(curl -s "$TUI_URL/api/session/$SESSION_ID/message" | jq -c '[.data[] | select(.type == "assistant" and .time.completed != null) | .time.completed - .time.created]')"
 echo "  assistant durations: $DURATIONS"
 if ! jq -e 'any(. > 0)' <<<"$DURATIONS" >/dev/null; then
   echo "e2e: no assistant message reports time.completed > time.created" >&2

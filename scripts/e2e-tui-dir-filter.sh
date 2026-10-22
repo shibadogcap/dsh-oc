@@ -36,13 +36,13 @@ seed_session() {
   local url="$1"
   local text="$2"
   local session
-  session="$(curl -s -X POST "$SEED_URL$url" -H 'Content-Type: application/json' -d '{}' | jq -er .id)"
-  curl -s -X POST "$SEED_URL/session/$session/message" -H 'Content-Type: application/json' \
-    -d "{\"parts\":[{\"type\":\"text\",\"text\":\"$text\"}]}" | jq -e '.info.role == "assistant"' >/dev/null
+  session="$(curl -s -X POST "$SEED_URL$url" -H 'Content-Type: application/json' -d '{}' | jq -er .data.id)"
+  curl -s -X POST "$SEED_URL/api/session/$session/prompt" -H 'Content-Type: application/json' \
+    -d "{\"parts\":[{\"type\":\"text\",\"text\":\"$text\"}]}" | jq -e '.data.sessionID != null' >/dev/null
   local deadline=$((SECONDS + 60))
   while (( SECONDS < deadline )); do
     local got
-    got="$(curl -s "$SEED_URL/session/$session/message" | jq -r '[.. | objects | select(has("text")) | .text] | join(" ")' 2>/dev/null || true)"
+    got="$(curl -s "$SEED_URL/api/session/$session/message" | jq -r '[.. | objects | select(has("text")) | .text] | join(" ")' 2>/dev/null || true)"
     if [[ "$got" == *"mock response recovered"* ]]; then break; fi
     sleep 1
   done
@@ -53,9 +53,9 @@ seed_session() {
   echo "$session"
 }
 
-SESSION_ROOT="$(seed_session "/session" "dir seed root")"
+SESSION_ROOT="$(seed_session "/api/session" "dir seed root")"
 SUB_URI="$(jq -rn --arg v "$SUB_DIR" '$v|@uri')"
-SESSION_SUB="$(seed_session "/session?directory=$SUB_URI" "dir seed sub")"
+SESSION_SUB="$(seed_session "/api/session?directory=$SUB_URI" "dir seed sub")"
 echo "  root=$SESSION_ROOT sub=$SESSION_SUB"
 
 echo "== restart dsh with relative --dir =="
@@ -93,8 +93,8 @@ tmux send-keys -t "$E2E_TUI_SESSION" "dir filter prompt" Enter
 PROMPT_HINT=""
 deadline=$((SECONDS + 60))
 while (( SECONDS < deadline )); do
-  for sid in $(curl -s "$BRIDGE_URL/session" | jq -r '.[].id'); do
-    local_text="$(curl -s "$BRIDGE_URL/session/$sid/message" | jq -r '[.. | objects | select(has("text")) | .text] | join(" ")' 2>/dev/null || true)"
+  for sid in $(curl -s "$BRIDGE_URL/api/session" | jq -r '.data[].id'); do
+    local_text="$(curl -s "$BRIDGE_URL/api/session/$sid/message" | jq -r '[.. | objects | select(has("text")) | .text] | join(" ")' 2>/dev/null || true)"
     if [[ "$local_text" == *"dir filter prompt"* && "$local_text" == *"mock response recovered"* ]]; then
       PROMPT_HINT="$sid"
       break 2
@@ -113,7 +113,7 @@ if [[ -z "$PROMPT_HINT" ]]; then
 fi
 
 SUB_ABS="$(cd "$SUB_DIR" && pwd)"
-MATCHED_SUB="$(curl -s "$BRIDGE_URL/session" | jq -r --arg id "$PROMPT_HINT" '.[] | select(.id == $id) | .directory')"
+MATCHED_SUB="$(curl -s "$BRIDGE_URL/api/session" | jq -r --arg id "$PROMPT_HINT" '.data[] | select(.id == $id) | .location.directory')"
 if [[ "$MATCHED_SUB" != "$SUB_ABS" ]]; then
   echo "e2e: new session directory is '$MATCHED_SUB', expected '$SUB_ABS'" >&2
   exit 1
@@ -121,7 +121,7 @@ fi
 echo "  new session lands in sub-project: $MATCHED_SUB"
 
 FILTER_URI="$(jq -rn --arg v "$SUB_ABS" '$v|@uri')"
-ROOT_IN_FILTER="$(curl -s "$BRIDGE_URL/session?directory=$FILTER_URI" | jq -r '[.[].id] | join(",")')"
+ROOT_IN_FILTER="$(curl -s "$BRIDGE_URL/api/session?directory=$FILTER_URI" | jq -r '[.data[].id] | join(",")')"
 if [[ "$ROOT_IN_FILTER" == *"$SESSION_ROOT"* ]]; then
   echo "e2e: root session leaked into the --dir filter" >&2
   exit 1

@@ -1,7 +1,4 @@
-import type {
-  PermissionRequest,
-  PermissionV2Request,
-} from '@opencode-ai/sdk/v2/types'
+import type { PermissionRequest as PermissionV2Request } from '@opencode/client'
 
 export interface PermissionEntry {
   opencodeId: string
@@ -11,6 +8,20 @@ export interface PermissionEntry {
   toolName: string
   callId?: string
   reason?: string
+}
+
+/**
+ * The 1.18.18 permission projection the SSE stream still publishes next to
+ * the 2.x one.
+ */
+export interface PermissionRequest {
+  id: string
+  sessionID: string
+  permission: string
+  patterns: string[]
+  metadata: Record<string, unknown>
+  always: string[]
+  tool?: { messageID: string; callID: string }
 }
 
 /** Map a dsh tool name onto the opencode permission category. */
@@ -54,6 +65,6 @@ export function toPermissionV2(entry: PermissionEntry): PermissionV2Request {
       ...(entry.callId === undefined ? {} : { callId: entry.callId }),
       ...(entry.reason === undefined ? {} : { reason: entry.reason }),
     },
-    ...(entry.callId === undefined ? {} : { source: { type: 'tool', messageID: '', callID: entry.callId } }),
+    ...(entry.callId === undefined ? {} : { source: { type: 'tool', messageID: '', callID: entry.callId } as any }),
   }
 }

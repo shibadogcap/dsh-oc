@@ -2,13 +2,45 @@ import type { AskUserQuestionItem } from '@deepseek-ai/dsh-user-questions/types'
 import type { HistoryEntry, SessionProjectionsBlock, SessionSummary } from './dsh-types.js'
 import type { PermissionEntry } from './convert/permission.js'
 import type { QuestionEntry } from './convert/question.js'
-import type { V1MessageEntry } from './convert/message.js'
+import type { WireMessageEntry } from './convert/wire.js'
 
 /** A memory-scoped "always" grant for one session + tool. */
 export interface SavedPermission {
   sessionId: string
   toolName: string
   grantedAt: number
+}
+
+/**
+ * A staged revert boundary.
+ *
+ * OpenCode's `session.revert.stage` names the message the transcript is cut
+ * at and asks for the file changes to be rolled back. The cut is exclusive:
+ * the named message and everything after it disappear when the revert
+ * commits.
+ */
+export interface StagedRevert {
+  /** The OpenCode message id the transcript is cut at. */
+  messageID: string
+  /**
+   * The dsh turn the boundary message belongs to, and whether that turn's own
+   * file changes roll back. A user prompt rolls them back (the assistant
+   * reply follows it), an assistant reply does not.
+   */
+  turn: number
+  includeTurn: boolean
+  /**
+   * The file diffs of the rolled-back files. They are computed before the
+   * rollback, because afterwards the files already carry the restored
+   * content and the diff would be empty.
+   */
+  files: Array<{
+    file: string
+    patch: string
+    additions: number
+    deletions: number
+    status: 'added' | 'deleted' | 'modified'
+  }>
 }
 
 /** One cached history page (tail or bounded by limit/beforeSeq). */
@@ -102,6 +134,14 @@ export class InteractionState {
   readonly byQuestionRpcId = new Map<string, string>()
   readonly sessionDirectories = new Map<string, string>()
   readonly sessionParents = new Map<string, string>()
+  /**
+   * Sessions whose dsh id changed under a fixed opencode id.
+   *
+   * A revert forks the dsh session at the boundary, so the opencode session
+   * id has to keep pointing at the fork. The map goes from the opencode id
+   * to the current dsh id; the reverse map is derived from it.
+   */
+  private readonly sessionAliases = new Map<string, string>()
   readonly sessionAddressModes = new Map<string, 'one-shot' | 'continuable'>()
   /** Sessions whose durable origin is the dsh subagent seam. */
   readonly sessionOrigins = new Set<string>()
@@ -133,7 +173,9 @@ export class InteractionState {
   /** One stale editor-agent value to suppress after an explicit /preset switch. */
   private readonly stalePresetPrompts = new Map<string, { from: string; to: string }>()
   /** Recent bridge-only command result cards retained for history hydration. */
-  private readonly recentCommandResults = new Map<string, V1MessageEntry[]>()
+  private readonly recentCommandResults = new Map<string, WireMessageEntry[]>()
+  /** Revert boundaries staged per session. */
+  private readonly revertBoundaries = new Map<string, StagedRevert>()
   /** User shell executions currently owned by this bridge session. */
   private readonly shellControllers = new Map<string, Set<AbortController>>()
   /** In-flight shell maintenance promises, awaited during bridge teardown. */
@@ -165,12 +207,7 @@ export class InteractionState {
   sessionListLoading?: Promise<SessionSummary[]>
   private sessionListGeneration = 0
   /** One bounded cold seed for the status endpoint; never retry in a poll loop. */
-  sessionStatusSeedAttempted = false
-  sessionStatusSeeded = false
-  sessionStatusLoading?: Promise<void>
   /** Lightweight counters used to prove the status poll has no list storm. */
-  sessionStatusRequests = 0
-  sessionStatusSeeds = 0
   sessionListRpcCalls = 0
   /** Whether this bridge run accepted new user input (banner-bearing content). */
   newInputDuringRun = false
@@ -376,7 +413,7 @@ export class InteractionState {
     return this.sessionOrigins.has(sessionId)
   }
 
-  recordCommandResult(sessionId: string, entry: V1MessageEntry): void {
+  recordCommandResult(sessionId: string, entry: WireMessageEntry): void {
     const results = this.recentCommandResults.get(sessionId) ?? []
     if (results.some((item) => item.info.id === entry.info.id)) return
     results.push(entry)
@@ -385,7 +422,7 @@ export class InteractionState {
   }
 
   /** Insert or replace one bridge-only card (used by running shell history). */
-  upsertCommandResult(sessionId: string, entry: V1MessageEntry): void {
+  upsertCommandResult(sessionId: string, entry: WireMessageEntry): void {
     const results = this.recentCommandResults.get(sessionId) ?? []
     const index = results.findIndex((item) => item.info.id === entry.info.id)
     if (index === -1) results.push(entry)
@@ -394,7 +431,7 @@ export class InteractionState {
     this.recentCommandResults.set(sessionId, results)
   }
 
-  commandResultsFor(sessionId: string): readonly V1MessageEntry[] {
+  commandResultsFor(sessionId: string): readonly WireMessageEntry[] {
     return this.recentCommandResults.get(sessionId) ?? []
   }
 
@@ -524,10 +561,6 @@ export class InteractionState {
     return true
   }
 
-  markSessionStatusSeeded(): void {
-    this.sessionStatusSeeded = true
-  }
-
   markSessionActivity(sessionId: string, updatedAt: number): void {
     const current = this.sessionStatusUpdatedAt.get(sessionId) ?? 0
     if (updatedAt >= current) this.sessionStatusUpdatedAt.set(sessionId, updatedAt)
@@ -539,6 +572,89 @@ export class InteractionState {
     this.sessionListLoading = undefined
     this.sessionListGeneration += 1
     this.invalidateHistory(sessionId)
+  }
+
+  /**
+   * Point an opencode session id at another dsh session.
+   *
+   * A revert forks the dsh session at the boundary, so the opencode id has
+   * to keep working while pointing at the fork.
+   */
+  setSessionAlias(opencodeId: string, dshId: string): void {
+    if (opencodeId === dshId) return
+    this.sessionAliases.set(opencodeId, dshId)
+  }
+
+  /** The dsh session an opencode session id currently points at. */
+  resolveSessionId(sessionId: string): string {
+    return this.sessionAliases.get(sessionId) ?? sessionId
+  }
+
+  /** The opencode session id a dsh session is published under. */
+  openCodeIdFor(sessionId: string): string {
+    for (const [opencodeId, dshId] of this.sessionAliases) {
+      if (dshId === sessionId) return opencodeId
+    }
+    return sessionId
+  }
+
+  /** The opencode session ids that point at a different dsh session. */
+  aliasedSessionIds(): string[] {
+    return [...this.sessionAliases.keys()]
+  }
+
+  /**
+   * Copy the per-session state of one session onto another.
+   *
+   * A revert forks the dsh session at the boundary. The fork inherits the
+   * conversation, so the model, the agent preset, the title and the message
+   * id mappings have to follow it, otherwise the rewritten session would
+   * show the deployment defaults and the clients would see the same message
+   * under two ids.
+   */
+  inheritSessionState(fromSessionId: string, toSessionId: string): void {
+    if (fromSessionId === toSessionId) return
+    const directory = this.sessionDirectories.get(fromSessionId)
+    if (directory !== undefined) this.sessionDirectories.set(toSessionId, directory)
+    const model = this.sessionModelSelections.get(fromSessionId)
+    if (model !== undefined) this.sessionModelSelections.set(toSessionId, model)
+    const title = this.sessionTitles.get(fromSessionId)
+    if (title !== undefined) this.sessionTitles.set(toSessionId, title)
+    const agent = this.sessionAgents.get(fromSessionId)
+    if (agent !== undefined) this.sessionAgents.set(toSessionId, agent)
+    const parent = this.sessionParents.get(fromSessionId)
+    if (parent !== undefined) this.sessionParents.set(toSessionId, parent)
+    const addressMode = this.sessionAddressModes.get(fromSessionId)
+    if (addressMode !== undefined) this.sessionAddressModes.set(toSessionId, addressMode)
+
+    const prefix = `${fromSessionId}\u0000`
+    for (const [key, value] of this.dshPromptMessageIds) {
+      if (!key.startsWith(prefix)) continue
+      this.dshPromptMessageIds.set(`${toSessionId}\u0000${key.slice(prefix.length)}`, value)
+    }
+    for (const [key, value] of this.promptMessageTimes) {
+      if (!key.startsWith(prefix)) continue
+      this.promptMessageTimes.set(`${toSessionId}\u0000${key.slice(prefix.length)}`, value)
+    }
+    const assistants = this.assistantIdsByUser.get(fromSessionId)
+    if (assistants !== undefined) this.assistantIdsByUser.set(toSessionId, new Map(assistants))
+  }
+
+  /**
+   * Stage a revert boundary. OpenCode's `session.revert.stage` names the
+   * message the transcript is cut at and asks for the file changes to be
+   * rolled back; the boundary is exclusive, so the named message and
+   * everything after it are dropped when the revert commits.
+   */
+  stageRevert(sessionId: string, revert: StagedRevert): void {
+    this.revertBoundaries.set(sessionId, revert)
+  }
+  clearRevert(sessionId: string): void {
+    this.revertBoundaries.delete(sessionId)
+  }
+
+  revertBoundary(sessionId: string): StagedRevert | undefined {
+    return this.revertBoundaries.get(sessionId)
   }
 
   /** Drop only history pages (used by the live SSE feed). */
@@ -605,6 +721,34 @@ export class InteractionState {
     return false
   }
 
+  /**
+   * Narrow one saved grant. The 2.1 client lets a user change the action or
+   * the resource of a remembered permission; the grant is keyed by the
+   * session and the tool, so a changed tool name is a new grant.
+   */
+  updateSavedPermission(
+    id: string,
+    change: { action?: string; resource?: string },
+  ): SavedPermission | undefined {
+    const key = [...this.savedPermissions.entries()].find(([entryKey, saved]) =>
+      entryKey === id
+      || this.savedPermissionId(saved) === id
+      || saved.toolName === id
+    )?.[0]
+    if (key === undefined) return undefined
+    const saved = this.savedPermissions.get(key)
+    if (saved === undefined) return undefined
+    const toolName = change.resource ?? saved.toolName
+    if (toolName !== saved.toolName) {
+      // The grant is keyed by the tool, so a renamed tool is a new entry.
+      this.savedPermissions.delete(key)
+      const next: SavedPermission = { ...saved, toolName }
+      this.savedPermissions.set(InteractionState.savedKey(saved.sessionId, toolName), next)
+      return next
+    }
+    return saved
+  }
+
   setSessionModelSelection(
     sessionId: string,
     selection: { providerID: string; modelID: string; variant?: string },
@@ -654,23 +798,26 @@ export class InteractionState {
 
   /** Register a TUI-generated message id for the next user echo of a session. */
   registerPromptMessageId(sessionId: string, promptId: string, createdAt = Date.now()): void {
-    const queue = this.promptMessageIds.get(sessionId)
+    // A revert moves the conversation to a fork, so the prompt ids are
+    // registered under the dsh session the events will arrive from.
+    const key = this.resolveSessionId(sessionId)
+    const queue = this.promptMessageIds.get(key)
     if (queue === undefined) {
-      this.promptMessageIds.set(sessionId, [promptId])
+      this.promptMessageIds.set(key, [promptId])
     } else {
       queue.push(promptId)
     }
-    this.promptMessageTimes.set(`${sessionId}\u0000${promptId}`, createdAt)
+    this.promptMessageTimes.set(`${key}\u0000${promptId}`, createdAt)
   }
 
   /** Timestamp used by the optimistic user card and its queue-state update. */
   promptMessageCreatedAt(sessionId: string, promptId: string): number | undefined {
-    return this.promptMessageTimes.get(`${sessionId}\u0000${promptId}`)
+    return this.promptMessageTimes.get(`${this.resolveSessionId(sessionId)}\u0000${promptId}`)
   }
 
   /** Oldest registered prompt id that has not been echoed yet, if any. */
   peekPromptMessageId(sessionId: string): string | undefined {
-    return this.promptMessageIds.get(sessionId)?.[0]
+    return this.promptMessageIds.get(this.resolveSessionId(sessionId))?.[0]
   }
 
   /**
@@ -678,11 +825,12 @@ export class InteractionState {
    * arrives; returns the surface id (prompt id when known, else the dsh id).
    */
   takePromptMessageId(sessionId: string, dshId: string): string {
-    const queue = this.promptMessageIds.get(sessionId)
+    const key = this.resolveSessionId(sessionId)
+    const queue = this.promptMessageIds.get(key)
     const promptId = queue?.shift()
-    if (queue !== undefined && queue.length === 0) this.promptMessageIds.delete(sessionId)
+    if (queue !== undefined && queue.length === 0) this.promptMessageIds.delete(key)
     if (promptId === undefined) return dshId
-    this.dshPromptMessageIds.set(`${sessionId}\u0000${dshId}`, promptId)
+    this.dshPromptMessageIds.set(`${key}\u0000${dshId}`, promptId)
     // Keep the optimistic timestamp for history hydration. The durable echo
     // is normally a few milliseconds later, but the TUI has already keyed
     // and rendered this card with the original value.
@@ -691,12 +839,12 @@ export class InteractionState {
 
   /** Map a durable dsh message id back to its TUI prompt id, if registered. */
   promptIdForDshId(sessionId: string, dshId: string): string | undefined {
-    return this.dshPromptMessageIds.get(`${sessionId}\u0000${dshId}`)
+    return this.dshPromptMessageIds.get(`${this.resolveSessionId(sessionId)}\u0000${dshId}`)
   }
 
   /** Reverse lookup: durable dsh id for a bridge/prompt id (user messages). */
   dshIdForPromptId(sessionId: string, promptId: string): string | undefined {
-    const prefix = `${sessionId}\u0000`
+    const prefix = `${this.resolveSessionId(sessionId)}\u0000`
     for (const [key, value] of this.dshPromptMessageIds) {
       if (key.startsWith(prefix) && value === promptId) return key.slice(prefix.length)
     }

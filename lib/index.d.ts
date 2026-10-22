@@ -44,7 +44,7 @@ declare const OPENCODE_ASSETS_FILE = "opencode-assets.json";
 //#region src/index.d.ts
 /** dsh-oc bundle version (keep in sync with package.json). */
 declare const DSH_OC_VERSION = "0.2.0-rc.4";
-declare const OPENCODE_VERSION = "1.18.18";
+declare const OPENCODE_VERSION = "2.1.0";
 declare const OPENCODE_COMMIT = "4643e65";
 //#endregion
 export { DSH_OC_VERSION, OPENCODE_ASSETS_FILE, OPENCODE_BIN_ENV, OPENCODE_COMMIT, OPENCODE_HOME_DIR, OPENCODE_VERSION, OPENCODE_VERSION_FILE, OcBridgeService, OpenCodeAsset, OpenCodeAssetsManifest, OpenCodeVersionManifest };

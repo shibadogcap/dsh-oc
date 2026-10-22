@@ -29,13 +29,13 @@ e2e_start_dsh "$E2E_ACTIVE_SESSION"
 e2e_wait_bridge_url
 SEED_URL="$E2E_BRIDGE_URL"
 
-SESSION="$(curl -s -X POST "$SEED_URL/session" -H 'Content-Type: application/json' -d '{}' | jq -er .id)"
-curl -s -X POST "$SEED_URL/session/$SESSION/message" -H 'Content-Type: application/json' \
-  -d '{"parts":[{"type":"text","text":"e2e seed: timestamp session"}]}' | jq -e '.info.role == "assistant"' >/dev/null
+SESSION="$(curl -s -X POST "$SEED_URL/api/session" -H 'Content-Type: application/json' -d '{}' | jq -er .data.id)"
+curl -s -X POST "$SEED_URL/api/session/$SESSION/prompt" -H 'Content-Type: application/json' \
+  -d '{"parts":[{"type":"text","text":"e2e seed: timestamp session"}]}' | jq -e '.data.sessionID != null' >/dev/null
 
 deadline=$((SECONDS + 60))
 while (( SECONDS < deadline )); do
-  TEXT="$(curl -s "$SEED_URL/session/$SESSION/message" | jq -r '[.. | objects | select(has("text")) | .text] | join(" ")' 2>/dev/null || true)"
+  TEXT="$(curl -s "$SEED_URL/api/session/$SESSION/message" | jq -r '[.. | objects | select(has("text")) | .text] | join(" ")' 2>/dev/null || true)"
   if [[ "$TEXT" == *"mock response recovered"* ]]; then
     echo "  seeded assistant reply ready"
     break

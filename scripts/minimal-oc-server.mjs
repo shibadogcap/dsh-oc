@@ -2,7 +2,8 @@
 // Minimal OpenCode-compatible server for the renderer-attribution repro
 // (experiment 1c): serves the full bridge route surface with a scripted
 // dsh event feed (a replay-corpus fixture) instead of a real dsh backend.
-// The official opencode 1.18.18 TUI can attach with `-s <sid>` and observe
+// The official opencode 2.1.0 TUI can connect with `--server <url> -s <sid>`
+// and observe
 // exactly the event sequence we control — no dsh, no real model, no timing
 // jitter beyond the configurable per-event delay.
 //

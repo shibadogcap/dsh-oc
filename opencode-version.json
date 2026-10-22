@@ -1,5 +1,4 @@
 {
-  "version": "1.18.18",
-  "commit": "4643e65",
-  "npm": "opencode-ai@1.18.18"
+  "version": "2.1.0",
+  "npm": "@opencode/cli@2.1.0"
 }

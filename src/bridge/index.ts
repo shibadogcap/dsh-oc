@@ -9,6 +9,11 @@ import type {} from '@deepseek-ai/dsh-user-questions/types'
 import type {} from '@deepseek-ai/dsh-agent'
 import { makeEvent } from './events.js'
 import { projectIdFor } from './convert/common.js'
+import { resolveWebUiDir, webUiDir } from './web-ui.js'
+import { resolveOpenCodeBinary } from '../tui/binary.js'
+import { OPENCODE_VERSION } from './convert/common.js'
+import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
+import { join } from 'node:path'
 
 export const name = '@chiro2001/dsh-oc/bridge'
 export const inject = [
@@ -19,7 +24,41 @@ export const inject = [
   'agents',
   'sessions',
   'sessionProjections',
+  'rewind',
 ] as const
+
+/**
+ * Find the official opencode web UI, so the bridge can serve it from its own
+ * origin.
+ *
+ * The UI is the one the opencode binary embeds, so a browser reaches the API
+ * same-origin and needs neither CORS nor a login, exactly like the official
+ * `opencode serve` setup.
+ *
+ * The binary is only looked up, never installed: the bridge must not pull a
+ * package at startup. The TUI plugin installs the binary anyway, so the web UI
+ * appears from the next start.
+ */
+async function resolveWebUi(log: (message: string) => void): Promise<string | undefined> {
+  const explicit = process.env.DSH_OC_WEB_UI
+  const home = resolveDshHome(undefined, process.env)
+  const version = OPENCODE_VERSION
+  const dir = join(home, 'opencode', 'web-ui', version)
+  const existing = webUiDir(explicit) ?? webUiDir(dir)
+  if (existing !== undefined) return existing
+  let binary: string
+  try {
+    const resolved = await resolveOpenCodeBinary({
+      version,
+      installNpmPackage: async () => false,
+    })
+    binary = resolved.bin
+  } catch (error) {
+    log(`web UI unavailable: ${error instanceof Error ? error.message : String(error)}`)
+    return undefined
+  }
+  return resolveWebUiDir({ home, version, binary, log })
+}
 
 /**
  * Keep older profile plugins (notably dsh-dcp rc.6) source-compatible with
@@ -121,6 +160,7 @@ export class OcBridgeService extends Service implements OcBridgeValue {
     const agents = this.ctx.get('agents') as BridgeAgents | undefined
     const sessions = this.ctx.get('sessions') as BridgeApi['sessions'] | undefined
     const sessionProjections = this.ctx.get('sessionProjections') as BridgeApi['sessionProjections'] | undefined
+    const rewind = this.ctx.get('rewind') as BridgeApi['rewind'] | undefined
     if (sessionController === undefined || agentPresets === undefined || goals === undefined || sessionSkillCatalog === undefined) {
       throw new Error('oc-bridge: missing dsh 0.1.2 host services (sessionController/agentPresets/goals/sessionSkillCatalog)')
     }
@@ -133,16 +173,30 @@ export class OcBridgeService extends Service implements OcBridgeValue {
       ...(agents === undefined ? {} : { agents }),
       ...(sessions === undefined ? {} : { sessions }),
       ...(sessionProjections === undefined ? {} : { sessionProjections }),
+      ...(rewind === undefined ? {} : { rewind }),
     }
     installSessionEventsOnLiveSessions(sessions)
-    const router = createBridgeRouter(api, { log: this.logger })
+    const webUi = await resolveWebUi(this.logger)
+    const router = createBridgeRouter(api, { log: this.logger, ...(webUi === undefined ? {} : { webUiDir: webUi }) })
     this.router = router
     router.prefetchSessionList()
-    const handle = await startBridgeServer(router)
+    const host = process.env.DSH_OC_HOST ?? '127.0.0.1'
+    const port = process.env.DSH_OC_PORT ? Number(process.env.DSH_OC_PORT) : 0
+    // The official opencode server allows localhost origins plus the ones
+    // named in its `cors` option. A browser UI on the LAN needs its origin
+    // listed here, otherwise the credentialed request is rejected.
+    const corsOrigins = (process.env.DSH_OC_CORS ?? '')
+      .split(',')
+      .map((value) => value.trim())
+      .filter((value) => value.length > 0)
+    const handle = await startBridgeServer(router, { host, port, corsOrigins })
     this.handle = handle
     this.url = handle.url
     this.port = handle.port
     this.logger(`bridge listening on ${handle.url}`)
+    if (webUi !== undefined) {
+      this.logger(`web UI served from ${webUi} (open ${handle.url}/)`)
+    }
     this.subscribeHostEvents(router, api)
     yield () => this.stop()
   }
@@ -368,18 +422,6 @@ export class OcBridgeService extends Service implements OcBridgeValue {
               type: 'control/baseline',
               value: frame.value as unknown as BridgeControlBaseline,
             })
-          } else if (frame.type === 'queue') {
-            await router.feed({
-              type: 'session/queue',
-              sessionId: String(frame.sessionId),
-              items: frame.items.map((item) => ({
-                placement: item.placement,
-                rpcId: item.rpcId === undefined ? undefined : String(item.rpcId),
-                message: item.message,
-              })),
-            })
-          } else if (frame.type === 'jobs') {
-            // Jobs have no TUI surface today; feed as a no-op frame type.
           } else if (frame.type === 'projection') {
             await router.feed({
               type: 'session/projection',

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Minimal-server renderer-attribution repro (experiment 1c): boots the
-# official opencode 1.18.18 TUI against a scripted, minimal OpenCode server
+# official opencode 2.1.0 TUI against a scripted, minimal OpenCode server
 # (scripts/minimal-oc-server.mjs) that replays the queued-mid-followup
 # corpus fixture with no dsh and no real model. Captures streaming pane
 # frames and records whether the follow-up text renders below the queued
@@ -58,7 +58,7 @@ echo "== boot official opencode TUI against the scripted server =="
 tmux kill-session -t "$SESSION" 2>/dev/null || true
 tmux new-session -d -s "$SESSION" -x 220 -y 55
 tmux send-keys -t "$SESSION" \
-  "cd '$PWD' && export TERM=xterm-256color OPENCODE_DISABLE_AUTOUPDATE=1 OPENCODE_DISABLE_MODELS_FETCH=1 OPENCODE_DISABLE_LSP_DOWNLOAD=1 && opencode attach '$URL' -s '$SID' --print-logs 2> '$RUN_DIR/tui.err'" Enter
+  "cd '$PWD' && export TERM=xterm-256color OPENCODE_DISABLE_AUTOUPDATE=1 OPENCODE_DISABLE_MODELS_FETCH=1 OPENCODE_DISABLE_LSP_DOWNLOAD=1 && opencode --server '$URL' -s '$SID' --print-logs 2> '$RUN_DIR/tui.err'" Enter
 
 READY=""
 deadline=$((SECONDS + 30))
@@ -119,7 +119,7 @@ if [[ "$CJK_MODE" == "1" ]]; then
 else
   CJK_BELOW="na"
 fi
-printf 'scenario=minimal-server-queued-mid-followup\nopencode=1.18.18\nfixture=%s\ntransient=%s\nsplit_frame=%s\nframes=%s\nfinal_queued_line=%s\nfinal_part1_line=%s\nfinal_part2_line=%s\ncjk_below_queued_frames=%s\n' \
+printf 'scenario=minimal-server-queued-mid-followup\nopencode=2.1.0\nfixture=%s\ntransient=%s\nsplit_frame=%s\nframes=%s\nfinal_queued_line=%s\nfinal_part1_line=%s\nfinal_part2_line=%s\ncjk_below_queued_frames=%s\n' \
   "$FIXTURE" "$TRANSIENT" "${SPLIT_FRAME:-na}" "$FRAME_COUNT" "${FQ:-na}" "${F1:-na}" "${F2:-na}" "$CJK_BELOW" \
   > "$RUN_DIR/report.txt"
 echo "  report: $RUN_DIR/report.txt"

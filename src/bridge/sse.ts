@@ -15,12 +15,52 @@ export interface SseHubOptions {
   maxReplayEvents?: number
   /** Maximum serialized wire bytes retained for Last-Event-ID replay. */
   maxReplayBytes?: number
+  /**
+   * Interval of the SSE comment heartbeat, in milliseconds.
+   *
+   * The official opencode server merges `": heartbeat\n\n"` into the event
+   * stream every 15 seconds. Clients treat a silent stream as stalled (the
+   * opencode client and the OpenChamber upstream reader both give up after
+   * 20-45 seconds) and reconnect, so the bridge has to keep the stream warm
+   * even when no session activity produces events. A comment line is ignored
+   * by every SSE parser but still counts as received data.
+   */
+  heartbeatMs?: number
 }
 
 interface ReplayEntry {
   event: BridgeGlobalEvent
   wire: string
   bytes: number
+}
+
+/** The SSE comment frame the official opencode server sends every 15 s. */
+const HEARTBEAT_FRAME = ': heartbeat\n\n'
+
+/** Default heartbeat interval; the same cadence the official server uses. */
+const DEFAULT_HEARTBEAT_MS = 15_000
+
+/**
+ * The wire object of one event.
+ *
+ * It carries the OpenCode 2.x envelope at the top level (`id`, `created`,
+ * `type`, `durable`, `location`, `data`), so a 2.x client reads the stream
+ * without knowing the 1.18.18 wrapper, and it keeps that wrapper
+ * (`directory`, `payload`) for the bundled 1.18.18 TUI.
+ */
+export function toWireEvent(event: BridgeGlobalEvent): Record<string, unknown> {
+  const { id, created, type, data, durable, location } = event.payload
+  return {
+    id,
+    ...(created === undefined ? {} : { created }),
+    type,
+    ...(durable === undefined ? {} : { durable }),
+    ...(location === undefined ? {} : { location }),
+    data,
+    directory: event.directory,
+    ...(event.project === undefined ? {} : { project: event.project }),
+    payload: event.payload,
+  }
 }
 
 /** Registry of active SSE connections plus the encoder/cleanup logic. */
@@ -32,6 +72,8 @@ export class SseHub {
   private replayBytes = 0
   private readonly maxReplayEvents: number
   private readonly maxReplayBytes: number
+  private readonly heartbeatMs: number
+  private heartbeatTimer: ReturnType<typeof setInterval> | undefined
   private nextId = 1
 
   constructor(
@@ -40,6 +82,40 @@ export class SseHub {
   ) {
     this.maxReplayEvents = Math.max(1, Math.floor(options.maxReplayEvents ?? 512))
     this.maxReplayBytes = Math.max(1, Math.floor(options.maxReplayBytes ?? 4 * 1024 * 1024))
+    this.heartbeatMs = Math.max(0, Math.floor(options.heartbeatMs ?? DEFAULT_HEARTBEAT_MS))
+    if (this.heartbeatMs > 0) {
+      this.heartbeatTimer = setInterval(() => this.heartbeat(), this.heartbeatMs)
+      // The timer must not hold the process open on its own.
+      this.heartbeatTimer.unref?.()
+    }
+  }
+
+  /**
+   * Write the SSE comment heartbeat to every open connection.
+   *
+   * The official opencode server sends `": heartbeat\n\n"` every 15 seconds.
+   * Without it a quiet session looks like a dead stream: the opencode client
+   * drops the connection with "Event stream stalled" and the OpenChamber
+   * upstream reader reconnects in a tight loop.
+   */
+  private heartbeat(): void {
+    for (const client of [...this.clients]) {
+      if (client.closed || client.res.destroyed) continue
+      try {
+        client.res.write(HEARTBEAT_FRAME)
+      } catch (error) {
+        this.log(`[bridge/sse] heartbeat to client ${client.id} failed: ${error instanceof Error ? error.message : String(error)}`)
+        this.remove(client)
+      }
+    }
+  }
+
+  /** Stop the heartbeat timer. */
+  dispose(): void {
+    if (this.heartbeatTimer !== undefined) {
+      clearInterval(this.heartbeatTimer)
+      this.heartbeatTimer = undefined
+    }
   }
 
   add(res: ServerResponse, filter?: (event: BridgeGlobalEvent) => boolean): SseClient {
@@ -79,7 +155,7 @@ export class SseHub {
   }
 
   private encode(event: BridgeGlobalEvent): ReplayEntry {
-    const data = JSON.stringify(event)
+    const data = JSON.stringify(toWireEvent(event))
     const wire = `id: ${event.payload.id}\ndata: ${data}\n\n`
     return { event, wire, bytes: Buffer.byteLength(wire) }
   }

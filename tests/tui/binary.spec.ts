@@ -30,7 +30,7 @@ function writeOpenCodePackage(packageDir: string): void {
   mkdirSync(packageDir, { recursive: true })
   writeFileSync(
     join(packageDir, 'package.json'),
-    JSON.stringify({ name: 'opencode-ai', version: '1.18.18', bin: { opencode: './bin/opencode.exe' } }),
+    JSON.stringify({ name: 'opencode-ai', version: '2.1.0', bin: { opencode: './bin/opencode.exe' } }),
   )
 }
 
@@ -41,7 +41,7 @@ function writeNpmPlatformPackage(home: string, key: string, executable = 'openco
     'packages',
     key,
     'node_modules',
-    `opencode-${key}`,
+    `@opencode/cli-${key}`,
     'bin',
     executable,
   )
@@ -49,7 +49,7 @@ function writeNpmPlatformPackage(home: string, key: string, executable = 'openco
   return bin
 }
 
-const versionProbe = async (): Promise<string> => 'opencode 1.18.18'
+const versionProbe = async (): Promise<string> => 'opencode 2.1.0'
 
 const linuxPlatform: PlatformSelection = {
   platform: 'linux',
@@ -89,7 +89,7 @@ describe('resolveOpenCodeBinary', () => {
   it('uses the versioned cache next', async () => {
     const root = tmpDir('cache')
     const home = join(root, 'home')
-    const bin = join(home, 'opencode', 'bin', '1.18.18', 'opencode')
+    const bin = join(home, 'opencode', 'bin', '2.1.0', 'opencode')
     touch(bin)
     const result = await resolveOpenCodeBinary({
       env: { PATH: '' },
@@ -144,7 +144,7 @@ describe('resolveOpenCodeBinary', () => {
         home: join(root, 'home'),
         probe: async () => 'opencode 0.0.0',
       }),
-    ).rejects.toThrow(/reports version 0\.0\.0.*expected 1\.18\.18/s)
+    ).rejects.toThrow(/reports version 0\.0\.0.*expected 2\.1\.0/s)
   })
 
   it('rejects an explicit DSH_OC_OPENCODE_BIN that does not exist', async () => {
@@ -169,10 +169,10 @@ describe('resolveOpenCodeBinary', () => {
       resolveOpenCodeBinary({
         env: { DSH_OC_OPENCODE_BIN: bin, PATH: '' },
         home: join(root, 'home'),
-        probe: async () => 'opencode 1.18.180',
+        probe: async () => 'opencode 2.1.00',
         download: async () => join(root, 'downloaded', 'opencode'),
       }),
-    ).rejects.toThrow(/reports version 1\.18\.180.*expected 1\.18\.18/s)
+    ).rejects.toThrow(/reports version 2\.1\.00.*expected 2\.1\.0/s)
   })
 
   it('continues from a wrong PATH binary to an installed package', async () => {
@@ -188,7 +188,7 @@ describe('resolveOpenCodeBinary', () => {
       env: { PATH: join(root, 'bin') },
       home: join(root, 'home'),
       packageRoots: [packageDir],
-      probe: async bin => (bin === pathBin ? 'opencode 0.0.0' : 'opencode 1.18.18'),
+      probe: async bin => (bin === pathBin ? 'opencode 0.0.0' : 'opencode 2.1.0'),
       runPackagePostinstall: async () => {},
       installNpmPackage: async () => false,
     })
@@ -207,7 +207,7 @@ describe('resolveOpenCodeBinary', () => {
       env: { PATH: join(root, 'bin') },
       home,
       platform: linuxPlatform,
-      probe: async bin => (bin === pathBin ? 'opencode 0.0.0' : 'opencode 1.18.18'),
+      probe: async bin => (bin === pathBin ? 'opencode 0.0.0' : 'opencode 2.1.0'),
       installNpmPackage: async () => false,
       download,
     })
@@ -222,7 +222,7 @@ describe('resolveOpenCodeBinary', () => {
     const calls: string[] = []
     const install = vi.fn(async (packageName: string) => {
       calls.push(packageName)
-      if (packageName === 'opencode-linux-x64') {
+      if (packageName === '@opencode/cli-linux-x64') {
         writeNpmPlatformPackage(home, 'linux-x64')
       }
       return true
@@ -241,7 +241,7 @@ describe('resolveOpenCodeBinary', () => {
       installNpmPackage: install,
     })
 
-    expect(calls).toEqual(['opencode-linux-x64-baseline', 'opencode-linux-x64'])
+    expect(calls).toEqual(['@opencode/cli-linux-x64-baseline', '@opencode/cli-linux-x64'])
     expect(result.source).toBe('package')
     expect(result.bin).toBe(writeNpmPlatformPackage(home, 'linux-x64'))
   })
@@ -260,7 +260,7 @@ describe('resolveOpenCodeBinary', () => {
       download,
     })
 
-    expect(install).toHaveBeenCalledWith('opencode-linux-x64', '1.18.18', expect.stringContaining('packages/linux-x64'))
+    expect(install).toHaveBeenCalledWith('@opencode/cli-linux-x64', '2.1.0', expect.stringContaining('packages/linux-x64'))
     expect(download).toHaveBeenCalledTimes(1)
     expect(result).toEqual({ bin: join(root, 'downloaded', 'opencode'), source: 'download' })
   })
@@ -280,7 +280,7 @@ describe('resolveOpenCodeBinary', () => {
     expect(download).toHaveBeenCalledTimes(1)
     expect(download).toHaveBeenCalledWith(
       expect.objectContaining({
-        version: '1.18.18',
+        version: '2.1.0',
         home: join(root, 'home'),
       }),
     )
@@ -290,15 +290,15 @@ describe('resolveOpenCodeBinary', () => {
 
 describe('parseOpenCodeVersion', () => {
   it('extracts x.y.z from common opencode --version outputs', () => {
-    expect(parseOpenCodeVersion('1.18.18')).toBe('1.18.18')
-    expect(parseOpenCodeVersion('opencode 1.18.18')).toBe('1.18.18')
-    expect(parseOpenCodeVersion('opencode v1.18.18 (bun 1.2.3)')).toBe('1.18.18')
+    expect(parseOpenCodeVersion('2.1.0')).toBe('2.1.0')
+    expect(parseOpenCodeVersion('opencode 2.1.0')).toBe('2.1.0')
+    expect(parseOpenCodeVersion('opencode v2.1.0 (bun 1.2.3)')).toBe('2.1.0')
   })
 
   it('returns undefined for missing or ambiguous output', () => {
     expect(parseOpenCodeVersion(undefined)).toBeUndefined()
     expect(parseOpenCodeVersion('not a version')).toBeUndefined()
-    expect(parseOpenCodeVersion('1.18.180')).toBe('1.18.180')
+    expect(parseOpenCodeVersion('2.1.00')).toBe('2.1.00')
     expect(parseOpenCodeVersion('1.18')).toBeUndefined()
   })
 })
@@ -306,19 +306,19 @@ describe('parseOpenCodeVersion', () => {
 describe('verifyOpenCodeVersion', () => {
   it('resolves when the probed version matches', async () => {
     await expect(
-      verifyOpenCodeVersion('/x/opencode', '1.18.18', async () => 'opencode 1.18.18'),
-    ).resolves.toBe('1.18.18')
+      verifyOpenCodeVersion('/x/opencode', '2.1.0', async () => 'opencode 2.1.0'),
+    ).resolves.toBe('2.1.0')
   })
 
   it('rejects mismatches with the expected remediation message', async () => {
     await expect(
-      verifyOpenCodeVersion('/x/opencode', '1.18.18', async () => 'opencode 0.0.0'),
-    ).rejects.toThrow(/reports version 0\.0\.0.*expected 1\.18\.18.*DSH_OC_OPENCODE_BIN/s)
+      verifyOpenCodeVersion('/x/opencode', '2.1.0', async () => 'opencode 0.0.0'),
+    ).rejects.toThrow(/reports version 0\.0\.0.*expected 2\.1\.0.*DSH_OC_OPENCODE_BIN/s)
   })
 
   it('rejects unparseable probe output', async () => {
     await expect(
-      verifyOpenCodeVersion('/x/opencode', '1.18.18', async () => 'garbage'),
+      verifyOpenCodeVersion('/x/opencode', '2.1.0', async () => 'garbage'),
     ).rejects.toThrow(/reports version unknown/)
   })
 })

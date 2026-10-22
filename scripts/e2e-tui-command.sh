@@ -32,17 +32,17 @@ e2e_start_dsh "$E2E_ACTIVE_SESSION"
 e2e_wait_bridge_url
 SEED_URL="$E2E_BRIDGE_URL"
 
-SESSION="$(curl -s -X POST "$SEED_URL/session" -H 'Content-Type: application/json' -d '{}' | jq -er .id)"
+SESSION="$(curl -s -X POST "$SEED_URL/api/session" -H 'Content-Type: application/json' -d '{}' | jq -er .data.id)"
 echo "  seeded session: $SESSION"
 for text in "e2e command seed: first" "e2e command seed: second"; do
-  curl -s -X POST "$SEED_URL/session/$SESSION/message" -H 'Content-Type: application/json' \
-    -d "{\"parts\":[{\"type\":\"text\",\"text\":\"$text\"}]}" | jq -e '.info.role == "assistant"' >/dev/null
+  curl -s -X POST "$SEED_URL/api/session/$SESSION/prompt" -H 'Content-Type: application/json' \
+    -d "{\"parts\":[{\"type\":\"text\",\"text\":\"$text\"}]}" | jq -e '.data.sessionID != null' >/dev/null
 done
 
 local_text=""
 deadline=$((SECONDS + 60))
 while (( SECONDS < deadline )); do
-  local_text="$(curl -s "$SEED_URL/session/$SESSION/message" | jq -r '[.. | objects | select(has("text")) | .text] | join(" ")' 2>/dev/null || true)"
+  local_text="$(curl -s "$SEED_URL/api/session/$SESSION/message" | jq -r '[.. | objects | select(has("text")) | .text] | join(" ")' 2>/dev/null || true)"
   if [[ "$local_text" == *"mock response recovered"* && "$(grep -o 'mock response recovered' <<<"$local_text" | wc -l)" -ge 2 ]]; then
     break
   fi
@@ -87,7 +87,7 @@ echo "  seeded content visible: \"$SEED_HINT\""
 
 echo "== /preset autocomplete, Enter + Enter =="
 e2e_tui_capture "$E2E_RUN_DIR/tui-before-preset.txt"
-USER_COUNT_BEFORE="$(e2e_curl -s "$TUI_URL/session/$SESSION/message" | jq '[.[] | select(.info.role == "user")] | length')"
+USER_COUNT_BEFORE="$(e2e_curl -s "$TUI_URL/api/session/$SESSION/message" | jq '[.data[] | select(.type == "user")] | length')"
 
 # OpenCode renders the slash autocomplete asynchronously. Sending both Enter
 # keys in one tmux batch can race that render and leave the input on the
@@ -178,7 +178,7 @@ if [[ -z "$PRESET_HINT" ]]; then
 fi
 echo "  /preset result visible: $PRESET_HINT"
 
-USER_COUNT_AFTER="$(e2e_curl -s "$TUI_URL/session/$SESSION/message" | jq '[.[] | select(.info.role == "user")] | length')"
+USER_COUNT_AFTER="$(e2e_curl -s "$TUI_URL/api/session/$SESSION/message" | jq '[.data[] | select(.type == "user")] | length')"
 if [[ "$USER_COUNT_AFTER" != "$USER_COUNT_BEFORE" ]]; then
   echo "e2e: /preset triggered a model turn (user messages $USER_COUNT_BEFORE -> $USER_COUNT_AFTER)" >&2
   exit 1
@@ -247,7 +247,7 @@ if [[ -z "$HELP_AUTOCOMPLETE_STABLE" ]]; then
   tail -80 "$E2E_RUN_DIR/tui-help-autocomplete-failure.scrollback.txt" >&2 || true
   exit 1
 fi
-# OpenCode 1.18.18 also exposes its own local Help action as `/help`; the
+# OpenCode 2.1.0 also exposes its own local Help action as `/help`; the
 # bridge command is the second candidate. Select the bridge candidate
 # explicitly so this e2e verifies dsh-oc's capability summary rather than the
 # generic keymap dialog.

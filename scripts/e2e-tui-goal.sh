@@ -49,14 +49,25 @@ SEED_BRIDGE="$E2E_BRIDGE_URL"
 
 # Run the goal surface on the standard preset: the goal tool must be in the
 # session's catalog, which a deployment may restrict away from minimal.
-GOAL_SESSION="$(curl -s -X POST "$SEED_BRIDGE/session" -H 'Content-Type: application/json' -d '{"agent":"standard"}' | jq -er .id)"
+GOAL_SESSION="$(curl -s -X POST "$SEED_BRIDGE/api/session" -H 'Content-Type: application/json' -d '{"agent":"standard"}' | jq -er .data.id)"
 echo "  goal session: $GOAL_SESSION"
-curl -s -X POST "$SEED_BRIDGE/session/$GOAL_SESSION/message" -H 'Content-Type: application/json' \
-  -d '{"parts":[{"type":"text","text":"e2e: create a goal"}]}' | jq -e '.info.role == "assistant"' >/dev/null
-wait_assistant_text "$SEED_BRIDGE/session/$GOAL_SESSION/message" "Goal created: ship e2e goal support"
-curl -s "$SEED_BRIDGE/session/$GOAL_SESSION/todo" \
-  | jq -e --arg goal 'Goal: ship e2e goal support' 'any(.[]; .content == $goal)' >/dev/null
-echo "  goal persisted and visible through the todo route"
+# The v2 surface publishes the merged goal/todo list over SSE.
+GOAL_SSE="$E2E_RUN_DIR/goal-seed-sse.txt"
+curl -sN --max-time 180 "$SEED_BRIDGE/api/event" > "$GOAL_SSE" &
+GOAL_SSE_PID=$!
+sleep 2
+curl -s -X POST "$SEED_BRIDGE/api/session/$GOAL_SESSION/prompt" -H 'Content-Type: application/json' \
+  -d '{"parts":[{"type":"text","text":"e2e: create a goal"}]}' | jq -e --arg s "$GOAL_SESSION" '.data.sessionID == $s' >/dev/null
+wait_assistant_text "$SEED_BRIDGE/api/session/$GOAL_SESSION/message" "Goal created: ship e2e goal support"
+deadline=$((SECONDS + 30))
+while (( SECONDS < deadline )); do
+  if grep -qa 'Goal: ship e2e goal support' "$GOAL_SSE"; then break; fi
+  sleep 1
+done
+grep -qa 'Goal: ship e2e goal support' "$GOAL_SSE"
+kill "$GOAL_SSE_PID" 2>/dev/null || true
+wait "$GOAL_SSE_PID" 2>/dev/null || true
+echo "  goal persisted and visible in the todo stream"
 
 e2e_stop_dsh "$E2E_ACTIVE_SESSION"
 E2E_ACTIVE_SESSION=""

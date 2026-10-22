@@ -25,7 +25,7 @@ for dir in bin packages cache; do
   rm -rf "$E2E_DSH_HOME/opencode/$dir"
 done
 
-echo "== boot real opencode attach with unreachable proxy =="
+echo "== boot real opencode TUI with unreachable proxy =="
 OFFLINE_ENV="HTTPS_PROXY=http://127.0.0.1:9 HTTP_PROXY=http://127.0.0.1:9 NO_PROXY=127.0.0.1,localhost"
 e2e_tui_start "" "$OFFLINE_ENV"
 e2e_tui_wait_attach
@@ -34,7 +34,7 @@ TUI_HINT=""
 deadline=$((SECONDS + 45))
 while (( SECONDS < deadline )); do
   e2e_tui_capture "$E2E_RUN_DIR/tui-offline.txt"
-  for pattern in "Ask anything" "Mock Model" "DeepSeek" "opencode" "OpenCode" "1.18.18"; do
+  for pattern in "Ask anything" "Mock Model" "DeepSeek" "opencode" "OpenCode" "2.1.0"; do
     if grep -qa "$pattern" "$E2E_RUN_DIR/tui-offline.txt"; then
       TUI_HINT="$pattern"
       break 2

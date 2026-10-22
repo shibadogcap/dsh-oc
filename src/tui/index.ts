@@ -1,6 +1,6 @@
 /**
  * oc-tui Cordis plugin: resolve the opencode binary, spawn
- * `opencode attach <bridge-url>` with an isolated data home, forward parent
+ * `opencode --server <bridge-url>` with an isolated data home, forward parent
  * signals, and request a bounded dsh exit when the child exits.
  */
 
@@ -151,7 +151,7 @@ export function prepareOpenCodeTuiState(
 /**
  * Seed the isolated opencode config with `autoupdate: false`, preserving any
  * existing values. This is the config-level counterpart of
- * `OPENCODE_DISABLE_AUTOUPDATE` and keeps the attach child from downloading or
+ * `OPENCODE_DISABLE_AUTOUPDATE` and keeps the TUI child from downloading or
  * hot-replacing itself even if a future opencode version changes the env flag.
  */
 export function prepareOpenCodeConfig(dshHome: string): void {
@@ -216,7 +216,7 @@ export interface StartTuiOptions {
   clearTimeoutImpl?: TimerClearer
 }
 
-/** A running attach child with forwarding and bounded termination helpers. */
+/** A running TUI child with forwarding and bounded termination helpers. */
 export interface RunningTui {
   readonly child: TuiChild
   /** Forward one parent signal to the child. */
@@ -225,7 +225,7 @@ export interface RunningTui {
   terminate(): void
 }
 
-/** Spawn `opencode attach` with stdio inherit and signal/termination helpers. */
+/** Spawn `opencode --server <url>` with stdio inherit and signal/termination helpers. */
 export function startOpenCodeTui(options: StartTuiOptions): RunningTui {
   const bridgeUrl = options.bridge.url.length > 0
     ? options.bridge.url
@@ -244,7 +244,17 @@ export function startOpenCodeTui(options: StartTuiOptions): RunningTui {
   })
   const killTimeoutMs = options.killTimeoutMs ?? 5000
 
-  const child = spawnImpl(options.bin, ['attach', bridgeUrl, ...options.tuiArgs], {
+  // The 2.x CLI dropped the `attach` subcommand: the server URL is a global
+  // `--server` flag, and the working directory is a positional argument.
+  // `--mini` selects the `mini` subcommand, which takes the same flags.
+  const mini = options.tuiArgs.includes('--mini')
+  const rest = options.tuiArgs.filter((arg) => arg !== '--mini')
+  const child = spawnImpl(options.bin, [
+    ...(mini ? ['mini'] : []),
+    '--server',
+    bridgeUrl,
+    ...rest,
+  ], {
     cwd,
     stdio: 'inherit',
     env,
@@ -321,12 +331,18 @@ export function installSignalForwarding(
   }
 }
 
-/** Supported `opencode attach` flags passed through unchanged. */
-const BOOLEAN_TUI_ARGS = new Set(['--continue', '-c', '--fork', '--mini', '--print-logs'])
-const VALUE_TUI_ARGS = new Set(['--session', '-s', '--dir', '--log-level'])
+/** Supported `opencode` flags passed through unchanged. */
+const BOOLEAN_TUI_ARGS = new Set(['--continue', '-c', '--fork', '--mini', '--print-logs', '--auto', '--standalone'])
+const VALUE_TUI_ARGS = new Set(['--session', '-s', '--log-level'])
+/**
+ * Flags dsh-oc consumes itself. `--dir` moves the bridge's working
+ * directory; the 2.x CLI takes the directory as a positional argument, so it
+ * is not forwarded.
+ */
+const CONSUMED_TUI_ARGS = new Set(['--dir'])
 
 /**
- * Filter dsh app arguments into opencode `attach` arguments.
+ * Filter dsh app arguments into opencode arguments.
  * Unknown/malformed arguments are reported, never silently dropped.
  */
 export function filterSupportedArgs(args: readonly string[]): { pass: string[]; ignored: string[] } {
@@ -336,6 +352,13 @@ export function filterSupportedArgs(args: readonly string[]): { pass: string[]; 
     const arg = args[index] ?? ''
     const equalsAt = arg.startsWith('--') ? arg.indexOf('=') : -1
     const name = equalsAt >= 0 ? arg.slice(0, equalsAt) : arg
+    if (CONSUMED_TUI_ARGS.has(name)) {
+      // dsh-oc applies it to the bridge; the CLI is not told about it.
+      if (equalsAt < 0 && args[index + 1] !== undefined && !args[index + 1]!.startsWith('-')) {
+        index++
+      }
+      continue
+    }
     if (BOOLEAN_TUI_ARGS.has(name)) {
       pass.push(arg)
       continue
@@ -387,7 +410,7 @@ export function tuiSessionFromArgs(args: readonly string[]): string | undefined 
   return undefined
 }
 
-/** Resolve and validate an attach `--dir` value before handing it to opencode. */
+/** Resolve and validate a `--dir` value before handing it to opencode. */
 export function resolveTuiDir(dir: string): string {
   const resolved = resolve(dir)
   let stat

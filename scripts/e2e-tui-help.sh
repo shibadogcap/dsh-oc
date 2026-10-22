@@ -34,7 +34,7 @@ if [[ "$HELP_RC" != "0" ]]; then
 fi
 echo "  dsh exit: 0"
 
-for pattern in "dsh-oc" "1.18.18" "核心能力" "--session/-s" "docs/FEATURES.md" "docs/PROTOCOL.md"; do
+for pattern in "dsh-oc" "2.1.0" "核心能力" "--session/-s" "docs/FEATURES.md" "docs/PROTOCOL.md"; do
   if ! grep -qa -- "$pattern" "$E2E_RUN_DIR/tui-help.txt"; then
     echo "e2e: help output missing pattern: $pattern" >&2
     tail -80 "$E2E_RUN_DIR/tui-help.txt" >&2 || true

@@ -4,9 +4,9 @@
  *
  * Generates a synthetic dsh session home, boots the real `dsh --profile oc`
  * bridge (with a fake opencode child), and measures:
- *   - GET /session            (v1 list) and GET /api/session (v2 list)
- *   - GET /session/:id/message (v1/v2 message pagination)
- *   - SSE /global/event first-event latency
+ *   - GET /api/session           (session list)
+ *   - GET /api/session/:id/message (message pagination)
+ *   - SSE /api/event first-event latency
  *   - dsh process RSS at each scale
  *
  * CLI:
@@ -94,34 +94,33 @@ async function timeRequest(url, method = 'GET', body) {
   return { ms: performance.now() - start, status: response.status, bytes: Buffer.byteLength(text) }
 }
 
-/** Fetch the v1 session list and count entries with a real (non-folder) title. */
+/** Fetch the session list and count entries with a real (non-folder) title. */
 async function titleCoverage(bridgeUrl) {
   const start = performance.now()
-  const response = await fetch(`${bridgeUrl}/session`)
-  const list = await response.json()
+  const response = await fetch(`${bridgeUrl}/api/session`)
+  const body = await response.json()
+  const list = Array.isArray(body) ? body : body.data ?? []
   const ms = performance.now() - start
-  const total = Array.isArray(list) ? list.length : 0
-  const titled = Array.isArray(list)
-    ? list.filter((session) => {
-        const directory = typeof session.directory === 'string' ? session.directory : ''
+  const total = list.length
+  const titled = list.filter((session) => {
+        const directory = typeof session.location?.directory === 'string' ? session.location.directory : ''
         const base = directory.split('/').filter(Boolean).pop() ?? ''
         return typeof session.title === 'string' && session.title.length > 0 && session.title !== base
       }).length
-    : 0
   return { ms, total, titled }
 }
 
 async function measureSseFirstEvent(bridgeUrl, sessionId) {
   const controller = new AbortController()
   const start = performance.now()
-  const response = await fetch(`${bridgeUrl}/global/event`, { signal: controller.signal })
+  const response = await fetch(`${bridgeUrl}/api/event`, { signal: controller.signal })
   const reader = response.body.getReader()
   const decoder = new TextDecoder()
   let buffer = ''
   let firstEventMs
   try {
     // Trigger an event after the stream is established.
-    await timeRequest(`${bridgeUrl}/session`, 'POST', { directory: undefined, title: `perf-sse-${sessionId}` })
+    await timeRequest(`${bridgeUrl}/api/session`, 'POST', { location: { directory: undefined }, title: `perf-sse-${sessionId}` })
     const triggerAt = performance.now()
     for (;;) {
       const { done, value } = await reader.read()
@@ -291,37 +290,26 @@ async function main() {
     report.boot = { ms: performance.now() - bootStart }
     if (!quiet) process.stderr.write(`perf: bridge ready in ${report.boot.ms.toFixed(0)}ms at ${bridgeUrl}\n`)
 
-    // Session list: cold (first request) + hot repeats (v1 + v2).
-    const listV1 = [await timeRequest(`${bridgeUrl}/session`)]
+    // Session list: cold (first request) + hot repeats.
     const listV2 = [await timeRequest(`${bridgeUrl}/api/session`)]
     for (let i = 0; i < repeats - 1; i++) {
-      listV1.push(await timeRequest(`${bridgeUrl}/session`))
       listV2.push(await timeRequest(`${bridgeUrl}/api/session`))
     }
-    report.measurements.listV1 = summarize(listV1.map((x) => x.ms))
     report.measurements.listV2 = summarize(listV2.map((x) => x.ms))
-    report.measurements.listV1.status = listV1.at(-1)?.status
     report.measurements.listV2.status = listV2.at(-1)?.status
     if (!quiet) {
-      process.stderr.write(`perf: GET /session cold=${listV1[0].ms.toFixed(1)}ms hotP95=${report.measurements.listV1.p95.toFixed(1)}ms (${listV1.at(-1)?.bytes} bytes)\n`)
+      process.stderr.write(`perf: GET /api/session cold=${listV2[0].ms.toFixed(1)}ms hotP95=${report.measurements.listV2.p95.toFixed(1)}ms (${listV2.at(-1)?.bytes} bytes)\n`)
     }
 
-    // Message pagination: sample up to 5 sessions, v1 + v2.
-    const messageV1 = []
+    // Message pagination: sample up to 5 sessions.
     const messageV2 = []
     for (const id of generated.sessionIds.slice(0, 5)) {
-      for (const path of [`/session/${id}/message`, `/api/session/${id}/message`]) {
-        const result = await timeRequest(`${bridgeUrl}${path}?limit=50`)
-        if (path.includes('/api/')) messageV2.push(result)
-        else messageV1.push(result)
-      }
+      messageV2.push(await timeRequest(`${bridgeUrl}/api/session/${id}/message?limit=50`))
     }
-    report.measurements.messageV1 = summarize(messageV1.map((x) => x.ms))
     report.measurements.messageV2 = summarize(messageV2.map((x) => x.ms))
-    report.measurements.messageV1.status = messageV1.at(-1)?.status
     report.measurements.messageV2.status = messageV2.at(-1)?.status
     if (!quiet) {
-      process.stderr.write(`perf: GET /session/:id/message p50=${report.measurements.messageV1.p50.toFixed(1)}ms p95=${report.measurements.messageV1.p95.toFixed(1)}ms\n`)
+      process.stderr.write(`perf: GET /api/session/:id/message p50=${report.measurements.messageV2.p50.toFixed(1)}ms p95=${report.measurements.messageV2.p95.toFixed(1)}ms\n`)
     }
 
     // V2 history endpoint: cold + hot reads and a full pagination pass using

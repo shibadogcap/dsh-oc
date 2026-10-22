@@ -116,18 +116,18 @@ tmux send-keys -t "$E2E_TUI_SESSION" "$FIRST_PROMPT" Enter
 SID=""
 deadline=$((SECONDS + 60))
 while (( SECONDS < deadline )); do
-  SESSION_LIST="$(e2e_curl -s "$E2E_BRIDGE_URL/session" 2>/dev/null || true)"
+  SESSION_LIST="$(e2e_curl -s "$E2E_BRIDGE_URL/api/session" 2>/dev/null || true)"
   while IFS= read -r candidate; do
     [[ -n "$candidate" ]] || continue
-    candidate_history="$(e2e_curl -s "$E2E_BRIDGE_URL/session/$candidate/message" 2>/dev/null || true)"
+    candidate_history="$(e2e_curl -s "$E2E_BRIDGE_URL/api/session/$candidate/message" 2>/dev/null || true)"
     if jq -e --arg prompt "$FIRST_PROMPT" '
-      any(.[]?; .info.role == "user"
-        and any(.parts[]?.text // empty; . == $prompt))
+      any(.data[]?; .type == "user"
+        and (.text // "") == $prompt)
     ' <<<"$candidate_history" >/dev/null 2>&1; then
       SID="$candidate"
       break
     fi
-  done < <(jq -r '.[].id // empty' <<<"$SESSION_LIST" 2>/dev/null || true)
+  done < <(jq -r '.data[].id // empty' <<<"$SESSION_LIST" 2>/dev/null || true)
   if [[ -n "$SID" ]]; then break; fi
   if [[ -s "$E2E_RUN_DIR/dsh-exit.txt" ]]; then
     echo "e2e: dsh exited while resolving the first prompt session" >&2
@@ -150,12 +150,12 @@ PENDING_HISTORY=""
 STREAM_MARKER_HINT="not yet visible"
 deadline=$((SECONDS + 60))
 while (( SECONDS < deadline )); do
-  PENDING_HISTORY="$(e2e_curl -s "$E2E_BRIDGE_URL/session/$SID/message" 2>/dev/null || true)"
+  PENDING_HISTORY="$(e2e_curl -s "$E2E_BRIDGE_URL/api/session/$SID/message" 2>/dev/null || true)"
   if jq -e '
-    [ .[]? | select(.info.role == "assistant") ] | last
-    | (.info.id != null and .info.id != "" and .info.time.completed == null)
+    [ .data[]? | select(.type == "assistant") ] | last
+    | (.id != null and .id != "" and .time.completed == null)
   ' <<<"$PENDING_HISTORY" >/dev/null 2>&1; then
-    PENDING_ASSISTANT_ID="$(jq -r '[.[]? | select(.info.role == "assistant")] | last.info.id // empty' <<<"$PENDING_HISTORY")"
+    PENDING_ASSISTANT_ID="$(jq -r '[.data[]? | select(.type == "assistant")] | last.id // empty' <<<"$PENDING_HISTORY")"
     if grep -qa 'streaming-live' <<<"$PENDING_HISTORY"; then
       STREAM_MARKER_HINT="visible in API history"
     fi
@@ -200,11 +200,11 @@ while (( SECONDS < deadline )); do
     && grep -qa "QUEUED" "$E2E_RUN_DIR/tui-queue-live.txt"; then
     QUEUED_HINT="keyboard prompt visible with QUEUED badge"
   fi
-  CURRENT_HISTORY="$(e2e_curl -s "$E2E_BRIDGE_URL/session/$SID/message" 2>/dev/null || true)"
+  CURRENT_HISTORY="$(e2e_curl -s "$E2E_BRIDGE_URL/api/session/$SID/message" 2>/dev/null || true)"
   if jq -e --arg assistant "$PENDING_ASSISTANT_ID" --arg prompt "$SECOND_PROMPT" '
-    (to_entries | map(select(.value.info.id == $assistant)) | .[0].key) as $assistantIndex
-    | (to_entries | map(select(.value.info.role == "user"
-        and any(.value.parts[]?.text // empty; . == $prompt))) | .[0].key) as $userIndex
+    (to_entries | map(select(.value.id == $assistant)) | .[0].key) as $assistantIndex
+    | (to_entries | map(select(.value.type == "user"
+        and (.value.text // "") == $prompt)) | .[0].key) as $userIndex
     | ($assistantIndex != null and $userIndex != null and $userIndex > $assistantIndex)
   ' <<<"$CURRENT_HISTORY" >/dev/null 2>&1; then
     ORDER_HINT="second user follows pending assistant in API history"

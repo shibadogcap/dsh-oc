@@ -165,13 +165,20 @@ export type BridgeHostFrame =
   | { type: 'host/session-removed'; sessionId: string }
 
 /** Per-session agent preset, learned from the creation value or live events. */
-export interface SessionSummary extends HostSessionSummary {
+export interface SessionSummary extends Omit<HostSessionSummary, 'projections'> {
   /** Agent preset this session's agent was composed from (may be absent). */
   agentPreset?: string
+  /** Projection block; kind is optional for bridge-side mocks. */
+  projections?: {
+    kind?: string
+    asOfSeq: number
+    values: Partial<Record<string, unknown>>
+  }
 }
 
 /** One cut of provider-validated projection values at a session event cursor. */
 export interface SessionProjectionsBlock {
+  kind?: string
   asOfSeq: number
   values: Partial<Record<string, unknown>>
 }

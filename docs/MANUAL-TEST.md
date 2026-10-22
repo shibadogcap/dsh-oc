@@ -10,7 +10,7 @@
 ## 1. 启动与品牌
 
 - 预期：启动画面显示 **DSH OC** 字符画（不再是 OPENCODE），随后进入
-  opencode TUI，底部显示 opencode `1.18.18`。
+  opencode TUI，底部显示 opencode `2.1.0`。
 - 试：`dsh --profile oc`；`dsh --profile oc --help` 显示能力摘要。
 
 ## 2. 基础对话
@@ -88,7 +88,7 @@
 - Task 卡片应能跳转到实际 child session；child 页面仍显示正确的父会话关系，
   一次性 child 完成后仍可查看历史。
 - 自动化回归：`scripts/e2e-tui-subagent.sh`（隔离 dsh profile + 官方
-  `opencode attach` + 精确 PID observe-only monitor）。
+  `opencode --server` + 精确 PID observe-only monitor）。
 
 ## 10. 其它入口
 
@@ -102,12 +102,12 @@
 
 ## 11. 协议端点冒烟（可选，开发者）
 
-启动后从 attach 进程参数取 bridge URL（`opencode attach http://127.0.0.1:<port>`）：
+启动后从 TUI 进程参数取 bridge URL（`opencode --server http://127.0.0.1:<port>`）：
 
 ```bash
 B=http://127.0.0.1:<port>
 curl -s $B/api/health                       # {"healthy":true}
-curl -s $B/vcs                              # 当前 git 分支/默认分支
+curl -s $B/api/vcs                          # 当前 git 分支/默认分支
 curl -s $B/api/fs/read/README.md            # 工作区文件内容
 curl -s $B/api/fs/list                      # 工作区目录
 curl -s "$B/api/fs/find?query=README"       # 文件查找
@@ -120,9 +120,9 @@ curl -s $B/api/permission/request           # 无 pending 时 {"data":[]}
   schema-valid stub；opencode 退出 splash 无法替换（只有下方说明）；
   `ask_user_question` 的 `multiple` 选项在官方 TUI 中无可视多选交互。
 
-## 13. 与官方 opencode 的显示对比（1.18.18 + 本地 mock）
+## 13. 与官方 opencode 的显示对比（2.1.0 + 本地 mock）
 
-在同一 mock provider 下逐项对比官方 `opencode attach` 与 dsh-oc：
+在同一 mock provider 下逐项对比官方 `opencode --server` 与 dsh-oc：
 
 - 启动画面：官方显示 OPENCODE 字符画；dsh-oc 显示 DSH OC 字符画。
 - 基础对话：用户消息与助手回复均只渲染一次；思考期间显示 `+ Thought`，
@@ -139,12 +139,12 @@ curl -s $B/api/permission/request           # 无 pending 时 {"data":[]}
 `scripts/e2e-tui-permission.sh` 覆盖上述大部分场景；真实模型回归见
 `scripts/e2e-real-llm.sh`。
 
-已知残余差异（官方 TUI 1.18.18 中观察到的即时显示限制）：工具调用回合的
+已知残余差异（官方 TUI 2.1.0 中观察到的即时显示限制）：工具调用回合的
 后续文本在“忙碌中排队第二条消息”的**即时视图**下可能渲染在排队卡片之后；
 桥接规范化数据已证明 exactly-once、父子正确（v1/v2 历史把工具与后续文本
 合并为同一消息），`--session` 重新进入会话后顺序完全正确；官方 opencode
 同类场景甚至不保留该后续文本。具体归因（renderer vs bridge 事件合法性）
-待官方 1.18.18 最小复现实验闭合。已新增
+待官方 2.1.0 最小复现实验闭合。已新增
 `scripts/e2e-queued-order-repro.sh` 复现记录：慢速工具+后续文本流中从键盘
 排队第二条 prompt，逐帧抓拍流式期间面板顺序并冻结归一化 SSE 基线
 （`tests/fixtures/golden/queued-followup-1.18.18.sse.jsonl`）；mock 驱动
@@ -155,7 +155,7 @@ curl -s $B/api/permission/request           # 无 pending 时 {"data":[]}
 面板 45/50 帧存在回复内容渲染在排队卡片下方。综合证据支持“官方 TUI
 即时渲染顺序受排队后到达的后续文本影响”的方向。官方最小 server 归因
 （`scripts/minimal-oc-server.mjs` + `scripts/e2e-minimal-server-repro.sh`）：
-无 dsh/无真实模型，仅用桥组件按脚本化事件序列喂官方 1.18.18 TUI
+无 dsh/无真实模型，仅用桥组件按脚本化事件序列喂官方 2.1.0 TUI
 （queued-mid-followup fixture：后续文本 part2 在排队用户事件之后到达），
 TUI 仍把完整后续文本渲染在排队卡片上方（顺序正确，95 帧未观察到瞬态错序）。
 该结果指向“错序依赖真实会话中未覆盖的事件交错/消息身份形态”，最终归因
@@ -186,7 +186,7 @@ scripts/monitor-process-io.sh --start --terminate-owned --samples 10 \
   --interval 1 --log /tmp/dsh-oc-owned.tsv -- sleep 30
 ```
 
-fake attach 的空闲回归：`tests/e2e/fake-opencode-idle.sh`。它证明修复后的
+fake TUI binary 的空闲回归：`tests/e2e/fake-opencode-idle.sh`。它证明修复后的
 fake binary 不再因 EOF 忙循环消耗 CPU/I/O。
 
 监控安全自测：`tests/e2e/monitor-process-io-read.sh` 验证 16 MiB 的
@@ -195,7 +195,7 @@ fake binary 不再因 EOF 忙循环消耗 CPU/I/O。
 终止保护。
 
 真实 TUI e2e 可选设置 `DSH_OC_E2E_MONITOR_IO=1`。此时
-`e2e_tui_wait_attach` 精确取得当前 run 的 `opencode attach` PID，并以
+`e2e_tui_wait_attach` 精确取得当前 run 的 `opencode --server` PID，并以
 observe-only 模式采样其进程树；日志和告警分别写入当前
 `E2E_RUN_DIR/opencode-attach-<pid>*.io.tsv` / `.io.warn`，告警仍同步到 stderr。
 默认采样间隔为 `0.25s`、read 窗口阈值为 `32MiB`，可用

@@ -71,24 +71,28 @@ tmux send-keys -t "$E2E_TUI_SESSION" 'first marker message' Enter
 SID=""
 deadline=$((SECONDS + 60))
 while (( SECONDS < deadline )); do
-  SID="$(curl -s "$E2E_BRIDGE_URL/session" | jq -r '.[0].id // empty' 2>/dev/null || true)"
+  SID="$(curl -s "$E2E_BRIDGE_URL/api/session" | jq -r '.data[0].id // empty' 2>/dev/null || true)"
   if [[ -n "$SID" ]]; then break; fi
   sleep 1
 done
 [[ -n "$SID" ]]
 echo "  session $SID"
 
-wait_assistant_text "$E2E_BRIDGE_URL/session/$SID/message" "mock response recovered"
+wait_assistant_text "$E2E_BRIDGE_URL/api/session/$SID/message" "mock response recovered"
 echo "  first reply seen"
 
 GOAL_OBJECTIVE="按计划完成SVE实验"
 tmux send-keys -t "$E2E_TUI_SESSION" "/goal $GOAL_OBJECTIVE" Enter
 
+# The v2 surface publishes the merged goal/todo list over SSE.
+GOAL_SSE="$E2E_RUN_DIR/goal-command-sse.txt"
+curl -sN --max-time 120 "$E2E_BRIDGE_URL/api/event" > "$GOAL_SSE" &
+GOAL_SSE_PID=$!
+sleep 2
 TODO_OK=""
 deadline=$((SECONDS + 20))
 while (( SECONDS < deadline )); do
-  if curl -s "$E2E_BRIDGE_URL/session/$SID/todo" \
-    | jq -e --arg goal "Goal: $GOAL_OBJECTIVE" 'any(.[]; .content == $goal)' >/dev/null 2>&1; then
+  if grep -qa "Goal: $GOAL_OBJECTIVE" "$GOAL_SSE"; then
     TODO_OK="1"
     break
   fi
@@ -96,9 +100,12 @@ while (( SECONDS < deadline )); do
 done
 if [[ -z "$TODO_OK" ]]; then
   echo "e2e: goal not created with the full objective" >&2
-  curl -s "$E2E_BRIDGE_URL/session/$SID/todo" >&2 || true
+  tail -20 "$GOAL_SSE" >&2 || true
+  kill "$GOAL_SSE_PID" 2>/dev/null || true
   exit 1
 fi
+kill "$GOAL_SSE_PID" 2>/dev/null || true
+wait "$GOAL_SSE_PID" 2>/dev/null || true
 echo "  goal created with the full objective"
 
 GOAL_TEXT_SEEN=""
@@ -122,12 +129,12 @@ echo "  objective visible in the TUI"
 tmux send-keys -t "$E2E_TUI_SESSION" Escape Escape
 sleep 2
 
-USER_TEXTS="$(curl -s "$E2E_BRIDGE_URL/session/$SID/message?limit=500" \
-  | jq -r '[.[] | select(.info.role == "user") | .parts[] | select(.type == "text") | .text] | .[]' 2>/dev/null || true)"
+USER_TEXTS="$(curl -s "$E2E_BRIDGE_URL/api/session/$SID/message?limit=500" \
+  | jq -r '[.data[] | select(.type == "user") | .text] | .[]' 2>/dev/null || true)"
 if [[ "$(grep -c '^first marker message$' <<<"$USER_TEXTS" || true)" != "1" ]]; then
   echo "e2e: previous prompt was re-sent or lost (marker count != 1)" >&2
   grep -c '^first marker message$' <<<"$USER_TEXTS" >&2 || true
-  curl -s "$E2E_BRIDGE_URL/session/$SID/message?limit=500" | jq -r '[.[] | select(.info.role == "user") | .parts[] | select(.type == "text") | .text] | .[]' >&2 || true
+  curl -s "$E2E_BRIDGE_URL/api/session/$SID/message?limit=500" | jq -r '[.data[] | select(.type == "user") | .text] | .[]' >&2 || true
   exit 1
 fi
 if grep -qx '/goal' <<<"$USER_TEXTS"; then

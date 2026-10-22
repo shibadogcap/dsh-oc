@@ -18,7 +18,7 @@ trap cleanup EXIT
 
 e2e_new_run "tui-brand" "danger-full-access" "success" "1"
 
-echo "== boot real opencode attach with dsh-oc branding plugin =="
+echo "== boot real opencode TUI with dsh-oc branding plugin =="
 e2e_tui_start ""
 e2e_tui_wait_attach
 

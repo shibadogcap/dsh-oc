@@ -6,6 +6,95 @@
 
 ## [Unreleased]
 
+- 官方 OpenCode Web UI 改为由 bridge 自己提供，与 API 同一个源。官方 opencode
+  二进制把 Web UI 打成一段 `AppArchive`（小端 u32 的 JSON 索引长度 + 索引 +
+  brotli 压缩的资产本体），bridge 启动时解一次到
+  `$DSH_HOME/opencode/web-ui/<version>/`，之后自己伺服这些文件
+  （`src/bridge/web-ui.ts`）。查找顺序是 `DSH_OC_WEB_UI` 指定的目录优先，
+  其次是解包目录。官方 Web UI 总是用 `location.origin` 访问 API，同源之后
+  既没有 CORS 也没有登录，和官方 `opencode serve` 的设置一致。二进制只被查找、
+  不由 bridge 安装（TUI 插件本来就要装它），所以 Web UI 从下一次启动起出现；
+  找不到二进制时不提供 Web UI，API 不受影响。匹配不到任何路由的 `GET`/`HEAD`
+  回落到 Web UI 的 shell（单页应用），`_assets/` 下缺失的文件是 404。
+  `scripts/extract-opencode-web-ui.mjs` 可离线把资产抽到任意目录。
+- CORS 策略改为与官方 opencode 服务器一致（源码 `packages/server/src/cors.ts`）：
+  始终允许 `http://localhost:<port>`、`http://127.0.0.1:<port>`、
+  `oc://renderer`、tauri 的源和 `*.opencode.ai`，另加 `DSH_OC_CORS`
+  （逗号分隔，等价于官方服务器的 `cors` 选项，用于局域网上的浏览器 UI）。
+  允许时响应回显请求自己的 origin 并带
+  `Access-Control-Allow-Credentials: true`。旧实现一律回
+  `Access-Control-Allow-Origin: *`，带凭据的请求会被浏览器拒绝
+  （"credentialed request requires Access-Control-Allow-Origin '<origin>'"），
+  浏览器 UI 因此完全连不上。
+- SSE 增加心跳：`SseHub` 每 15 秒给每个连接写一帧官方服务器同样的注释帧
+  `: heartbeat\n\n`（官方实现在 `packages/server/src/handlers/event.ts`）。
+  之前安静会话的流看起来像断了：官方客户端以 "Event stream stalled" 断开并
+  重连，OpenChamber 的上游读取器 20 秒就放弃，两者都陷入重连循环。
+- SSE 的 status 快照改为有界（`SESSION_STATUS_SNAPSHOT_LIMIT = 20`）：先报运行中
+  的会话，剩下的名额按最近动过的顺序补。旧实现把 bridge 见过的一切会话都报一遍，
+  官方 Web UI 每次连接都要读几百条会话记录，初始加载永远结束不了。
+- 项目列表报告 bridge 的工作目录：`GET /api/project` 返回裸 `Project[]`，
+  `GET /api/project/:projectID` 与 `PATCH /api/project/:projectID` 返回裸 `Project`（PATCH 当前
+  只回显，不落盘）。官方服务器从它服务的目录推导项目列表，浏览器 UI 因此有
+  工作区可选。
+- `DSH_OC_HTTP_LOG=1` 打开 HTTP 请求追踪，每个请求到达时向 stderr 打一行
+  `[bridge/http] <METHOD> <path>`。这是没有浏览器时检查浏览器 UI 调用模式的
+  调试手段。
+- 会话回退（revert）：按 OpenCode 2.1.0 的语义实现。三个路由
+  `POST /api/session/:id/revert/stage`、`DELETE /api/session/:id/revert`、
+  `POST /api/session/:id/revert/commit`，三个 SSE 事件
+  `session.revert.staged` / `session.revert.cleared` / `session.revert.committed`。
+  边界是**排他**的：被指定的消息及其之后的消息在 commit 时一并丢弃，
+  `POST /api/session/:id/fork` 的 `before` 同样排他（dsh 的 fork 复制的是包含
+  `atSeq` 的事件前缀，所以切点取边界消息的前一个事件）。commit 以该切点 fork
+  dsh 会话，opencode 会话 id 跟随这个 fork（别名）：之后的 dsh 调用改写到 fork，
+  会话列表以原 id 发布 fork 并丢掉被替换的会话，`GET /api/session/:id` 与
+  `/message` 读 fork 的摘要与历史，fork 的 SSE 事件改写回原 id，会话级状态
+  （模型、agent preset、标题、消息 id 映射）继承到 fork。文件按 dsh 回合分组
+  回滚：stage 时就地回滚边界之后的回合改过的文件并回报 diff（clear 放回原状、
+  commit 保留回滚结果），边界是用户 prompt 时连同本回合一起回滚。和 OpenCode
+  一样，下一条 prompt 到达时先提交已暂存的回退，prompt 随后落到改写后的会话里。
+- 会话回退（revert）的已知限制：dsh 表达不了空 fork，切点在第一条消息之前时
+  返回 400 `cannot cut before the first message`；文件 diff 是首尾改动行之间的
+  一个粗 hunk（和 bridge 自己的文件改动 diff 同形），不是完整的 LCS diff。
+- 追加 `scripts/e2e-revert-flow.mjs`（`pnpm run e2e:revert`）与
+  `tests/e2e/revert.spec.ts`：对实 bridge 跑完 stage → clear → stage+commit →
+  下一条 prompt 的一整轮，断言边界排他、消息 id 保持、会话 id 不变，以及
+  同一会话里第二次卷回也能生效。
+- 修复 e2e 驱动器对 dsh 0.2.1-rc.2 的漂移，让官方 TUI 的实机 e2e 能真正跑起来：
+  默认代理只在 `127.0.0.1:14514` 真的有响应时才启用（否则 pnpm 报 tunnel
+  error）；dsh 进程按 `--profile oc` 匹配（dsh 现在是
+  `node .../dsh/lib/bin.js --profile oc`）；TUI 启动不再带 dsh 的
+  `--print-logs`（日志会盖在 TUI 的 alternate screen 上，pane 抓取因此看不到
+  输入框）；mock LLM 服务器从 `0.1.0-rc.6` 升到 `0.2.1-rc.2`（前者要求
+  `dsh-invariants@^0.1`，会被插件管理器拒绝）；配置转储检查改认
+  `agent-preset-registry` + `agent-preset`（dsh 0.2 把 `agent-presets` 拆开了）；
+  退出后的 shell 提示符判定补上 powerline 形状。
+- 修复第 2 次及以后的卷回：rewind 插件的 fork 现在先解析 alias，bridge 也用
+  解析后的 dsh 会话 id 去取文件快照，文件集合不再为空。
+- 升级到官方 OpenCode 2.1.0：锁定版本改为 `2.1.0`，`@opencode/client` 同步到
+  `2.1.0`，协议探针基准重录为 138 条路由。2.1.0 相对 2.0.32 的契约差异只有
+  一处新增（`PATCH /api/permission/saved/:id`，用于收窄一条已记住的授权），
+  bridge 已实现该路由；其余为类型重命名（`SessionMessageProviderState` 改为
+  `SessionMessageNative`）与新增事件类型（`session.archived` /
+  `session.unarchived`，dsh 无归档概念，暂不发）。
+- 迁移到官方 OpenCode 2.0.32：TUI 启动从 `opencode attach <url>` 改为
+  `opencode --server <url>`（`--mini` 走 `opencode mini --server <url>`）；2.x CLI
+  已删除 `attach` 子命令，旧写法会以 "Help requested" 报错。
+- 移除 v1 HTTP 层：`/session`、`/config`、`/provider`、`/global/event`、`/vcs*`、
+  `/permission`、`/question`、`/path`、`/project/*` 全部下线，只保留 `/api/*`；
+  OpenCode 2.x client 会调用的 137 条路由由 bridge 全部应答
+  （`scripts/check-client-routes.mjs` 校验 `missing: 0`）。
+- SSE 契约：事件流必须以 `server.connected` 开流（2.x client 拒绝不以它开头的
+  流），之后才做 `Last-Event-ID` 回放与 status/control snapshot 重放；该帧不进入
+  回放 ring。
+- 事件词汇：bridge 在继续发布 1.18.18 形状事件的同时，追加 2.x 原生词汇
+  （`session.text.*`、`session.tool.*`、`session.step.*`、`session.execution.*`、
+  `session.inbox.*`、`permission.*`、`form.*`、`session.compaction.*`），内置 TUI 与
+  OpenChamber UI 读同一条流。
+- e2e 与文档同步：脚本里的 TUI 启动命令改为 `--server` 形式，v1 路由改用 `/api/*`
+  等价路由，版本断言改为 `2.0.32`；`docs/PROTOCOL.md`、`docs/FEATURES.md` 与
+  README 改为 2.x 描述。
 - 修复发布后本地安装 resolver：只解析 dsh-oc codeload SHA，区分 dsh-dcp 等其他包；
   无 `rg` 时使用隔离验证过的 grep fallback，扫描失败或 SHA 缺失/歧义时 fail-closed。
 

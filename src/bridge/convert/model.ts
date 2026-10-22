@@ -3,14 +3,9 @@ import type {
   ModelProviderGroup,
 } from '@deepseek-ai/dsh-api-session-controller/types'
 import type {
-  Model as V1Model,
-  Provider as V1Provider,
-  ProviderListResponse,
-} from '@opencode-ai/sdk/client'
-import type {
-  ModelV2Info,
-  ProviderV2Info,
-} from '@opencode-ai/sdk/v2/types'
+  ModelInfo as ClientModelInfo,
+  ProviderInfo as ClientProviderInfo,
+} from '@opencode/client'
 import {
   externalProviderId,
   externalProviderName,
@@ -18,14 +13,6 @@ import {
 
 const DEFAULT_CONTEXT = 128000
 const DEFAULT_OUTPUT = 8192
-
-type V1ModelWithVariants = V1Model & {
-  variants?: Record<string, Record<string, unknown>>
-}
-
-type CatalogModelWithVariants = ProviderListResponse['all'][number]['models'][string] & {
-  variants?: Record<string, Record<string, unknown>>
-}
 
 /** Known dsh-official model capacities, matching dsh-llm-deepseek defaults. */
 const DEEPSEEK_LIMITS: Record<string, { context: number; output: number }> = {
@@ -50,18 +37,7 @@ function modelNameFor(groupId: string, modelId: string, modelName?: string) {
   return modelName ?? modelId
 }
 
-function variantsFor(model: ModelCatalogModel): Record<string, Record<string, unknown>> | undefined {
-  const efforts = model.reasoning?.efforts
-  if (!efforts?.length) return undefined
-  return Object.fromEntries(
-    efforts.map((effort) => [
-      effort.id,
-      { reasoningEffort: effort.id, name: effort.name },
-    ]),
-  )
-}
-
-function v2VariantsFor(model: ModelCatalogModel): ModelV2Info['variants'] {
+function v2VariantsFor(model: ModelCatalogModel): ClientModelInfo['variants'] {
   return (model.reasoning?.efforts ?? []).map((effort) => ({
     id: effort.id,
     headers: {},
@@ -69,111 +45,15 @@ function v2VariantsFor(model: ModelCatalogModel): ModelV2Info['variants'] {
   }))
 }
 
-function v1Model(group: ModelProviderGroup, model: ModelCatalogModel): V1ModelWithVariants {
-  const modelId = model.id
-  const providerId = externalProviderId(group.id)
-  const limit = limitFor(group.id, model.id)
-  return {
-    id: modelId,
-    providerID: providerId,
-    api: { id: providerId, url: '', npm: '@deepseek-ai/dsh' },
-    name: modelNameFor(group.id, model.id, model.name),
-    capabilities: {
-      temperature: false,
-      reasoning: true,
-      attachment: false,
-      toolcall: true,
-      input: {
-        text: true,
-        audio: false,
-        image: false,
-        video: false,
-        pdf: false,
-      },
-      output: {
-        text: true,
-        audio: false,
-        image: false,
-        video: false,
-        pdf: false,
-      },
-    },
-    cost: {
-      input: 0,
-      output: 0,
-      cache: { read: 0, write: 0 },
-    },
-    limit: limit,
-    status: 'active',
-    options: {},
-    headers: {},
-    ...(variantsFor(model) === undefined ? {} : { variants: variantsFor(model) }),
-  }
-}
-
-/** `GET /config/providers` → `providers` array (v1 `Provider[]`). */
-export function convertToV1Providers(groups: readonly ModelProviderGroup[]): V1Provider[] {
-  return groups.map((group) => {
-    const models: Record<string, V1Model> = {}
-    for (const model of group.models) models[model.id] = v1Model(group, model)
-    return {
-      id: externalProviderId(group.id),
-      name: externalProviderName(group.id, group.name),
-      source: 'api',
-      env: [],
-      options: {},
-      models,
-    }
-  })
-}
-
-/** `GET /provider` → the `{ all, default, connected }` catalog wrapper. */
-export function convertToProviderCatalog(
-  groups: readonly ModelProviderGroup[],
-): ProviderListResponse {
-  return {
-    all: groups.map((group) => {
-      const providerId = externalProviderId(group.id)
-      const models: Record<string, CatalogModelWithVariants> = {}
-      for (const model of group.models) {
-        const limit = limitFor(group.id, model.id)
-        models[model.id] = {
-          id: model.id,
-          name: modelNameFor(group.id, model.id, model.name),
-          release_date: '',
-          attachment: false,
-          reasoning: true,
-          temperature: false,
-          tool_call: true,
-          limit,
-          options: {},
-          status: 'active',
-          provider: { npm: '@deepseek-ai/dsh' },
-          ...(variantsFor(model) === undefined ? {} : { variants: variantsFor(model) }),
-        }
-      }
-      return {
-        api: 'dsh',
-        name: externalProviderName(group.id, group.name),
-        env: [],
-        id: providerId,
-        npm: '@deepseek-ai/dsh',
-        models,
-      }
-    }),
-    default: {},
-    connected: groups.map((group) => externalProviderId(group.id)),
-  }
-}
-
-/** `GET /api/model` → `ModelV2Info[]`. */
-export function convertToV2Models(groups: readonly ModelProviderGroup[]): ModelV2Info[] {
+/** `GET /api/model` → `ClientModelInfo[]`. */
+export function convertToV2Models(groups: readonly ModelProviderGroup[]): ClientModelInfo[] {
   return groups.flatMap((group) => {
     const providerId = externalProviderId(group.id)
     return group.models.map((model) => {
       const limit = limitFor(group.id, model.id)
       return {
         id: model.id,
+        modelID: model.id,
         providerID: providerId,
         name: modelNameFor(group.id, model.id, model.name),
         api: {
@@ -199,11 +79,13 @@ export function convertToV2Models(groups: readonly ModelProviderGroup[]): ModelV
   })
 }
 
-/** `GET /api/provider` → `ProviderV2Info[]`. */
-export function convertToV2Providers(groups: readonly ModelProviderGroup[]): ProviderV2Info[] {
+/** `GET /api/provider` → `ClientProviderInfo[]`. */
+export function convertToV2Providers(groups: readonly ModelProviderGroup[]): ClientProviderInfo[] {
   return groups.map((group) => ({
     id: externalProviderId(group.id),
     name: externalProviderName(group.id, group.name),
+    activation: 'enabled',
+    package: '@deepseek-ai/dsh',
     api: {
       type: 'native',
       url: '',

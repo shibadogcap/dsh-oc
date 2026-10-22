@@ -4,7 +4,7 @@
 // Compares the route surface the opencode TUI is known to request
 // (tests/fixtures/opencode/routes.json, sourced from docs/PROTOCOL.md) against
 // the routes actually registered by the oc-bridge, verifies the pinned
-// opencode binary version and the installed SDK version, and writes a
+// opencode binary version and the installed client version, and writes a
 // JSON/text compatibility report.
 //
 // Usage:
@@ -30,7 +30,8 @@ function parseVersion(output) {
 }
 
 function normalizePath(path) {
-  return path.replace(/:[^/]+/g, ':p')
+  // A `*` tail is the bridge's catch-all for a path parameter.
+  return path.replace(/\*/g, ':p').replace(/:[^/]+/g, ':p')
 }
 
 function routeKey(method, path, kind) {
@@ -94,18 +95,18 @@ async function main(argv) {
     notes.push(`opencode binary ${bin} matches ${expectedVersion}`)
   }
 
-  let sdkVersion
-  const sdkPackage = join(root, 'node_modules', '@opencode-ai', 'sdk', 'package.json')
-  if (existsSync(sdkPackage)) {
-    sdkVersion = JSON.parse(readFileSync(sdkPackage, 'utf8')).version
-    if (sdkVersion !== expectedVersion) {
+  let clientVersion
+  const clientPackage = join(root, 'node_modules', '@opencode', 'client', 'package.json')
+  if (existsSync(clientPackage)) {
+    clientVersion = JSON.parse(readFileSync(clientPackage, 'utf8')).version
+    if (clientVersion !== expectedVersion) {
       issues.push({
-        category: 'sdk-version',
-        message: `installed @opencode-ai/sdk is ${sdkVersion}, expected ${expectedVersion}`,
-        fix: 'Run pnpm install with the pinned @opencode-ai/sdk@<expected> before probing.',
+        category: 'client-version',
+        message: `installed @opencode/client is ${clientVersion}, expected ${expectedVersion}`,
+        fix: 'Run pnpm install with the pinned @opencode/client@<expected> before probing.',
       })
     } else {
-      notes.push(`@opencode-ai/sdk matches ${expectedVersion}`)
+      notes.push(`@opencode/client matches ${expectedVersion}`)
     }
   }
 
@@ -137,7 +138,7 @@ async function main(argv) {
     tool: 'dsh-oc protocol probe',
     expectedVersion,
     actualBinaryVersion: actualVersion,
-    sdkVersion,
+    clientVersion,
     fixture: fixturePath,
     registeredRoutes: registered.size,
     expectedRoutes: expected.size,
@@ -153,7 +154,7 @@ async function main(argv) {
   }
 
   if (!jsonOnly) {
-    console.log(`probe-opencode: expected ${expectedVersion}, binary ${actualVersion ?? 'unknown'}, SDK ${sdkVersion ?? 'missing'}`)
+    console.log(`probe-opencode: expected ${expectedVersion}, binary ${actualVersion ?? 'unknown'}, client ${clientVersion ?? 'missing'}`)
     for (const note of notes) console.log(`  note: ${note}`)
     for (const issue of issues) {
       console.log(`  FAIL ${issue.category}: ${issue.message}`)

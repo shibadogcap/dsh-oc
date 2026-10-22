@@ -1,4 +1,3 @@
-import type { Todo } from '@opencode-ai/sdk/client'
 import { stableId } from './common.js'
 
 interface DshTodoLike {
@@ -6,6 +5,17 @@ interface DshTodoLike {
   status?: unknown
   priority?: unknown
   id?: unknown
+}
+
+/**
+ * The todo shape the SSE `todo.updated` event carries. OpenCode 2.1.0 has
+ * no todo type of its own, so the bridge keeps the 1.x projection locally.
+ */
+export interface Todo {
+  content: string
+  status: string
+  priority: string
+  id: string
 }
 
 const PRIORITY = new Set(['high', 'medium', 'low'])

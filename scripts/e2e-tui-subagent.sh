@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Real opencode TUI subagent e2e. The first phase uses an isolated dsh profile
 # plus the deterministic mock to create a real dsh session-backed subagent;
-# the second phase restarts dsh with the official opencode attach TUI and
+# the second phase restarts dsh with the official opencode TUI and
 # verifies Task rendering, child navigation, and history hydration.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -28,7 +28,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# The helper observes only the exact opencode attach PID found for this run.
+# The helper observes only the exact opencode TUI PID found for this run.
 export DSH_OC_E2E_MONITOR_IO=1
 export DSH_OC_E2E_MONITOR_INTERVAL="${DSH_OC_E2E_MONITOR_INTERVAL:-0.25}"
 export DSH_OC_E2E_MONITOR_READ_THRESHOLD="${DSH_OC_E2E_MONITOR_READ_THRESHOLD:-33554432}"
@@ -40,9 +40,9 @@ E2E_ACTIVE_SESSION="dsh-oc-subagent-seed"
 e2e_start_dsh "$E2E_ACTIVE_SESSION"
 e2e_wait_bridge_url
 SEED_URL="$E2E_BRIDGE_URL"
-PARENT_ID="$(curl -s -X POST "$SEED_URL/session" -H 'Content-Type: application/json' -d '{}' | jq -er .id)"
+PARENT_ID="$(curl -s -X POST "$SEED_URL/api/session" -H 'Content-Type: application/json' -d '{}' | jq -er .data.id)"
 PROMPT_BODY="$(jq -nc --arg text "e2e parent creates a subagent" '{parts:[{type:"text",text:$text}]}')"
-curl -s -X POST "$SEED_URL/session/$PARENT_ID/message" \
+curl -s -X POST "$SEED_URL/api/session/$PARENT_ID/prompt" \
   -H 'Content-Type: application/json' -d "$PROMPT_BODY" >/dev/null
 echo "  parent session: $PARENT_ID"
 
@@ -50,7 +50,7 @@ TASK_JSON=""
 CHILD_ID=""
 deadline=$((SECONDS + 120))
 while (( SECONDS < deadline )); do
-  PARENT_MESSAGES="$(curl -s -m 5 "$SEED_URL/session/$PARENT_ID/message" || true)"
+  PARENT_MESSAGES="$(curl -s -m 5 "$SEED_URL/api/session/$PARENT_ID/message" || true)"
   TASK_JSON="$(jq -c '[.. | objects | select(.type == "tool" and .tool == "task")][-1] // empty' <<<"$PARENT_MESSAGES" 2>/dev/null || true)"
   CHILD_ID="$(jq -r '.state.metadata.sessionId // empty' <<<"$TASK_JSON" 2>/dev/null || true)"
   if [[ -n "$CHILD_ID" && "$TASK_JSON" != "" && "$TASK_JSON" != "null" ]]; then
@@ -80,7 +80,7 @@ if [[ "$TASK_TOOL" != task || "$TASK_DESCRIPTION" != "$DESCRIPTION" || -z "$TASK
 fi
 echo "  task mapped: type=$TASK_TYPE description=$TASK_DESCRIPTION child=$CHILD_ID"
 
-CHILD_SUMMARY="$(curl -s -m 5 "$SEED_URL/session/$CHILD_ID" || true)"
+CHILD_SUMMARY="$(curl -s -m 5 "$SEED_URL/api/session/$CHILD_ID" || true)"
 if ! jq -e --arg id "$CHILD_ID" --arg parent "$PARENT_ID" \
   '.id == $id and .parentID == $parent and .metadata.origin == "subagent"' <<<"$CHILD_SUMMARY" >/dev/null; then
   echo "e2e: child session lineage is incomplete" >&2
@@ -90,7 +90,7 @@ fi
 echo "  child lineage: parentID=$PARENT_ID origin=subagent"
 
 if ! jq -e --arg id "$CHILD_ID" --arg description "$DESCRIPTION" \
-  'any(.[]; .info.role == "assistant" and any(.parts[]?; .tool == "task" and .state.metadata.sessionId == $id and .state.input.description == $description))' \
+  'any(.data[]; .type == "assistant" and any(.content[]?; .type == "tool" and .state.metadata.sessionId == $id and .state.input.description == $description))' \
   <<<"$PARENT_MESSAGES" >/dev/null; then
   echo "e2e: parent history lost the completed task metadata" >&2
   exit 1
@@ -156,8 +156,8 @@ fi
 echo "  child pane visible: E2E_SUBAGENT_CHILD_OK"
 
 echo "== ordering and duplicate guard on the recovered parent history =="
-RECOVERED="$(curl -s -m 5 "$TUI_URL/session/$PARENT_ID/message")"
-USER_INDEX="$(jq -r '[.[] | select(.info.role == "user") | .parts[]?.text // empty] | index("e2e parent creates a subagent") // -1' <<<"$RECOVERED")"
+RECOVERED="$(curl -s -m 5 "$TUI_URL/api/session/$PARENT_ID/message")"
+USER_INDEX="$(jq -r '[.data[] | select(.type == "user") | .text] | index("e2e parent creates a subagent") // -1' <<<"$RECOVERED")"
 TASK_COUNT="$(jq '[.. | objects | select(.type == "tool" and .tool == "task")] | length' <<<"$RECOVERED")"
 if [[ "$USER_INDEX" == "-1" || "$TASK_COUNT" != "1" ]]; then
   echo "e2e: recovered parent ordering/task count invalid" >&2

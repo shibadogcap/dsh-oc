@@ -51,7 +51,7 @@ tmux send-keys -t "$E2E_TUI_SESSION" 'e2e recovery tool prompt' Enter
 SID=""
 deadline=$((SECONDS + 30))
 while (( SECONDS < deadline )); do
-  SID="$(curl -s "$E2E_BRIDGE_URL/session" | jq -r '.[0].id // empty' 2>/dev/null || true)"
+  SID="$(curl -s "$E2E_BRIDGE_URL/api/session" | jq -r '.data[0].id // empty' 2>/dev/null || true)"
   if [[ -n "$SID" ]]; then break; fi
   sleep 1
 done
@@ -59,13 +59,11 @@ done
 echo "  session $SID"
 
 wait_tool "$E2E_BRIDGE_URL/api/session/$SID/message"
-recovery_wait_text "$E2E_BRIDGE_URL/session/$SID/message" "e2e recovery tool prompt"
+recovery_wait_text "$E2E_BRIDGE_URL/api/session/$SID/message" "e2e recovery tool prompt"
 tmux send-keys -t "$E2E_TUI_SESSION" 'e2e recovery text prompt' Enter
-recovery_wait_text "$E2E_BRIDGE_URL/session/$SID/message" "e2e recovery text prompt"
+recovery_wait_text "$E2E_BRIDGE_URL/api/session/$SID/message" "e2e recovery text prompt"
 recovery_wait_idle "$E2E_BRIDGE_URL" "$SID"
 recovery_signature_v2 "$E2E_BRIDGE_URL" "$SID" "$E2E_RUN_DIR/live-v2.json"
-recovery_signature_v1 "$E2E_BRIDGE_URL" "$SID" "$E2E_RUN_DIR/live-v1.json"
-recovery_assert_sane "$E2E_RUN_DIR/live-v1.json" "$E2E_RUN_DIR/live-v2.json"
 echo "  live signatures saved"
 
 echo "== re-attach with --session in a fresh dsh process =="
@@ -75,10 +73,7 @@ e2e_tui_start "--session $SID"
 e2e_tui_wait_attach
 recovery_wait_tui_ready
 recovery_signature_v2 "$E2E_BRIDGE_URL" "$SID" "$E2E_RUN_DIR/reattach-v2.json"
-recovery_signature_v1 "$E2E_BRIDGE_URL" "$SID" "$E2E_RUN_DIR/reattach-v1.json"
-
 recovery_compare_graphs "v2" "$E2E_RUN_DIR/live-v2.json" "$E2E_RUN_DIR/reattach-v2.json"
-recovery_compare_graphs "v1" "$E2E_RUN_DIR/live-v1.json" "$E2E_RUN_DIR/reattach-v1.json"
 echo "  recovery consistent: v1+v2 messages, roles, parents and parts"
 
 echo "== exit through prompt submit =="

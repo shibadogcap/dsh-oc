@@ -110,6 +110,6 @@ describe('resolvePlatform', () => {
   it('handles windows arm64 and other single-candidate arches', () => {
     const selected = platformFor({ platform: 'win32', arch: 'arm64' })
     expect(selected.key).toBe('windows-arm64')
-    expect(selected.candidates).toEqual(['windows-arm64'])
+    expect(selected.candidates).toEqual(['windows-arm64', 'windows-x64-baseline', 'windows-x64'])
   })
 })

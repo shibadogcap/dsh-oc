@@ -13,11 +13,11 @@
 
 | 功能 | 状态 | 路由/实现 | 验证方式 | 最后更新 |
 |---|---|---|---|---|
-| Provider / 模型目录展示（v1 + v2） | ✅ | `GET /provider`、`GET /api/model`、`src/bridge/convert/model.ts` | `tests/convert/model.spec.ts`、`scripts/e2e-api.sh` | `f30b156` |
-| 默认 build agent 携带可用模型 | ✅ | `GET /agent`、`GET /api/agent`、`src/bridge/router.ts` | `tests/bridge-router.spec.ts` | `f30b156` |
-| 模型选择器回写 dsh（`/api/session/:id/model`） | ✅ | `POST /api/session/:sessionID/model`、`POST /session/:id/message` body model | `tests/bridge-router.spec.ts`、`e2e-api.sh` | 本提交 |
+| Provider / 模型目录展示 | ✅ | `GET /api/provider`、`GET /api/model`、`src/bridge/convert/model.ts` | `tests/convert/model.spec.ts`、`scripts/e2e-api.sh` | `f30b156` |
+| 默认 build agent 携带可用模型 | ✅ | `GET /api/agent`、`src/bridge/router.ts` | `tests/bridge-router.spec.ts` | `f30b156` |
+| 模型选择器回写 dsh（`/api/session/:id/model`） | ✅ | `POST /api/session/:sessionID/model`（body 携带 model） | `tests/bridge-router.spec.ts`、`e2e-api.sh` | 本提交 |
 | Reasoning effort / variant 展示与切换 | ✅ | `Model.variants`、`ModelV2Info.variants`、session model `variant` | `tests/convert/model.spec.ts`、`tests/bridge-router.spec.ts`、`scripts/e2e-api.sh`、TUI `ctrl+t` | 本提交 |
-| dsh agent preset 展示与切换（minimal 等） | ✅ | `GET /agent`、`GET /api/agent`、`POST /api/session/:sessionID/agent`、`POST /session/:id/command` `/preset` | `tests/bridge-router.spec.ts`；隔离 profile 无 minimal 时仅 build | 本提交 |
+| dsh agent preset 展示与切换（minimal 等） | ✅ | `GET /api/agent`、`POST /api/session/:sessionID/agent`、`POST /api/session/:id/command` `/preset` | `tests/bridge-router.spec.ts`；隔离 profile 无 minimal 时仅 build | 本提交 |
 | Tab/`/preset` 切换 agent 随 prompt 生效 | ✅ | prompt 体 `agent` 应用到会话；已产生回复的会话被 dsh 锁定（409）时，首次提交后显示一次锁定提示；最终切换卡片带完成时间及实际模型/variant，不会持续 QUEUED | `tests/bridge-router.spec.ts`、真实 TUI 与用户手动验证 | `v0.2.0-rc.2` |
 | 模型/Provider 错误映射 | ✅ | `src/bridge/errors.ts`、`src/bridge/rpc.ts` | `tests/bridge-router.spec.ts`（404/409/400/501） | `f30b156` |
 
@@ -25,20 +25,22 @@
 
 | 功能 | 状态 | 路由/实现 | 验证方式 | 最后更新 |
 |---|---|---|---|---|
-| 会话列表 / 状态 | ✅ | `GET /session`、`GET /session/status`、`GET /api/session` | `tests/bridge-router.spec.ts`、`e2e-api.sh` | `f30b156` |
+| 会话列表 / 状态 | ✅ | `GET /api/session`、`POST /api/session/:id/wait` | `tests/bridge-router.spec.ts`、`e2e-api.sh` | `f30b156` |
 | 会话列表标题回退 | ✅ | 持久标题 → 项目目录 basename → session id（对齐 dsh 客户端展示逻辑） | `tests/convert/session.spec.ts` | 本提交 |
 | 会话列表真实标题补读 | ✅ | dsh `session.list` 不携带 title 投影；bridge 按会话补读 history tail 投影并缓存，列表显示真实标题（≤40 全量同步、大列表后台补温 24，不阻塞列表） | `tests/bridge-router.spec.ts`、`scripts/e2e-tui-turn.sh` | 本提交 |
 | 会话搜索（v2 `?search=`）与 limit/目录过滤 | ✅ | `src/bridge/router.ts` `/api/session` 经 `session.search` | `tests/bridge-router.spec.ts` | 本提交 |
 | 会话列表分页（v2 `cursor` next/previous + order） | ✅ | `src/bridge/router.ts` `/api/session` offset 游标 | `tests/bridge-router.spec.ts` | 本提交 |
-| 新建 / 重命名 / 历史 / 消息 | ✅ | `POST /session`、`PATCH /session/:id`、`GET /session/:id/message` 等 | `tests/bridge-router.spec.ts`、`e2e-tui-turn.sh` | `f30b156` |
-| Prompt（v1 message、v1 alias、v2 prompt） | ✅ | `POST /session/:id/message`、`POST /session/:id/prompt`、`POST /api/session/:sessionID/prompt` | `e2e-api.sh`、`e2e-tui-turn.sh` | `f30b156` |
-| `!` Shell mode（用户命令） | ✅ | 官方 TUI `!` → `POST /session/:id/shell`；经 Agent `runMaintenance` 独占 idle 后启动 OS shell，映射 user/assistant/tool 卡片，并经非唤醒 `Agent.inject()` 将用户手动命令/输出注入下一次模型 prompt | `tests/bridge-router.spec.ts`、`scripts/e2e-tui-shell.sh`、用户手动 TUI | `v0.2.0-rc.2` |
-| `--mini` promptAsync 提交 | ✅ | `POST /session/:id/prompt_async`（204，slash/模型/agent 处理） | `tests/bridge-router.spec.ts`、`e2e-tui-mini.sh` | 本提交 |
-| Abort / cancel | ✅ | `POST /session/:id/abort` | `e2e-api.sh` | `f30b156` |
-| Fork（`parentID`） | ✅ | `POST /session/:id/fork`、`POST /api/session/:id/fork`，messageID→atSeq | `tests/bridge-router.spec.ts`、`e2e-api.sh` | 本提交 |
-| Todo 投影 | ✅ | `GET /session/:id/todo`、`src/bridge/convert/todo.ts` | `tests/convert/todo.spec.ts`、`tests/bridge-router.spec.ts` | `f30b156` |
-| Diff / produced-files / Modified Files | ✅ | `GET /session/:id/diff`、`GET /api/session/:id/diff`、`session.diff` + Snapshot/Patch part | `tests/bridge-router.spec.ts`、`e2e-tui-tools.sh` | 本提交 |
-| SSE 会话/消息事件 | ✅ | `GET /global/event`、`src/bridge/events.ts` | `tests/bridge-events.spec.ts`、`e2e-api.sh`、`e2e-tui-stream.sh` | `f30b156` |
+| 新建 / 重命名 / 历史 / 消息 | ✅ | `POST /api/session`、`PATCH /api/session/:id`、`GET /api/session/:id/message` 等 | `tests/bridge-router.spec.ts`、`e2e-tui-turn.sh` | `f30b156` |
+| Prompt | ✅ | `POST /api/session/:sessionID/prompt`（body `text` 或 `parts`） | `e2e-api.sh`、`e2e-tui-turn.sh` | `f30b156` |
+| `!` Shell mode（用户命令） | ✅ | 官方 TUI `!` → `POST /api/session/:id/shell`；经 Agent `runMaintenance` 独占 idle 后启动 OS shell，映射 user/assistant/tool 卡片，并经非唤醒 `Agent.inject()` 将用户手动命令/输出注入下一次模型 prompt | `tests/bridge-router.spec.ts`、`scripts/e2e-tui-shell.sh`、用户手动 TUI | `v0.2.0-rc.2` |
+| `--mini` prompt 提交 | ✅ | `POST /api/session/:sessionID/prompt`（slash/模型/agent 处理） | `tests/bridge-router.spec.ts`、`e2e-tui-mini.sh` | 本提交 |
+| Abort / cancel | ✅ | `POST /api/session/:id/interrupt` | `e2e-api.sh` | `f30b156` |
+| Fork（`parentID`） | ✅ | `POST /api/session/:id/fork`，messageID→atSeq | `tests/bridge-router.spec.ts`、`e2e-api.sh` | 本提交 |
+| 会话回退（revert） | ✅ | `POST /api/session/:sessionID/revert/stage`、`DELETE /api/session/:sessionID/revert`、`POST /api/session/:sessionID/revert/commit`；边界排他（边界消息及其后一并丢弃），stage 时按回合回滚文件并回报 diff，commit 以切点 fork dsh 会话且 opencode 会话 id 跟随 fork（别名），下一条 prompt 自动提交；会话记录带 `revert` 字段；SSE `session.revert.staged` / `.cleared` / `.committed` | `tests/contract/revert.spec.ts`、`tests/rewind/rewind.spec.ts` | 本提交 |
+| 会话回退的已知限制 | 🟡 | dsh 表达不了空 fork（切点在第一条消息之前时返回 400 `cannot cut before the first message`）；文件 diff 是首尾改动行之间的一个粗 hunk（与 bridge 自身的文件改动 diff 同形），不是完整 LCS diff | `docs/PROTOCOL.md` 4.3 节 | 本提交 |
+| Todo 投影 | ✅ | SSE `todo.updated`（2.x 无独立 todo GET 路由） | `tests/convert/todo.spec.ts`、`tests/bridge-router.spec.ts` | `f30b156` |
+| Diff / produced-files / Modified Files | ✅ | `GET /api/session/:id/diff`、`session.diff` + Snapshot/Patch part | `tests/bridge-router.spec.ts`、`e2e-tui-tools.sh` | 本提交 |
+| SSE 会话/消息事件 | ✅ | `GET /api/event`（首帧 `server.connected`）、`src/bridge/events.ts` | `tests/bridge-events.spec.ts`、`e2e-api.sh`、`e2e-tui-stream.sh` | `f30b156` |
 | SSE 文本 delta 成对重复 | 🟡 | 已知行为：dsh 对同一文本同时下发 `assistant/chunk` 与 packed `text-chunks`，且新 mux 订阅会重放；bridge 的 delta 可能成对重复，TUI 以 `message.updated` 全量文本渲染、实测无重复显示 | `docs/PROTOCOL.md` | 本提交 |
 | Agent/流错误 → `session.error` | ✅ | `stream/error` 与 `host/agent-error` 映射 | `tests/bridge-events.spec.ts` | 本提交 |
 | SSE mux/host 短暂错误自动重连（指数退避） | ✅ | `src/bridge/router.ts` `startSse` 重订阅（默认 250ms 起、最多 3 次） | `tests/bridge-events.spec.ts` | 本提交 |
@@ -65,7 +67,7 @@
 
 | 功能 | 状态 | 路由/实现 | 验证方式 | 最后更新 |
 |---|---|---|---|---|
-| Permission ask / once / reject | ✅ | `GET /permission`、`POST /permission/:id/reply`、v2 对偶路由 | `tests/convert/permission.spec.ts`、`e2e-api.sh` | `f30b156` |
+| Permission ask / once / reject | ✅ | `GET /api/permission/request`、`POST /api/session/{id}/permission/{rid}/reply`、`POST /api/permission/{rid}/reply` | `tests/convert/permission.spec.ts`、`e2e-api.sh` | `f30b156` |
 | “Always” 会话内记忆（同会话同工具自动放行） | ✅ | `src/bridge/state.ts` `savedPermissions` + SSE 自动 approve | `tests/bridge-events.spec.ts`、`e2e-api.sh` | 本提交 |
 | Saved permissions 查询/删除 | ✅ | `GET /api/permission/saved` + `DELETE /api/permission/saved/{id}`（`sessionID:toolName`），授权不跨会话泄漏 | `tests/bridge-events.spec.ts`、`scripts/e2e-api-permission.sh` | 本提交 |
 | SDK v2 权限/提问 request 别名 | ✅ | `GET /api/permission/request`、`GET /api/question/request`、`GET /api/session/{id}/permission/{rid}` | `tests/bridge-router.spec.ts`、`scripts/e2e-api-permission.sh` | 本提交 |
@@ -75,7 +77,7 @@
 
 | 功能 | 状态 | 路由/实现 | 验证方式 | 最后更新 |
 |---|---|---|---|---|
-| 主 agent（build）展示 | ✅ | `GET /agent`、`GET /api/agent`、`src/bridge/router.ts` | `tests/bridge-router.spec.ts` | `f30b156` |
+| 主 agent（build）展示 | ✅ | `GET /api/agent`、`src/bridge/router.ts` | `tests/bridge-router.spec.ts` | `f30b156` |
 | Background subagents | ✅ | `GET /experimental/capabilities` 返回 `{ backgroundSubagents: true }`；`POST /experimental/session/{id}/background` no-op 成功（dsh 会话服务端常驻、`subagent` 默认后台） | `e2e-api.sh`、`tests/bridge-router.spec.ts` | 本提交 |
 | 子代理会话树 / parent-child 渲染 | ✅ | `Session.parentID`、child cwd/parent 继承、child 历史复用 | `tests/convert/session.spec.ts`、`e2e-api.sh` fork lineage | 本提交 |
 | 原生 OpenCode Task 子代理卡片 | ✅ | dsh `subagent*` → `tool: task`，child `sessionId` metadata 与 parent lineage 保留 | `tests/bridge-events.spec.ts`、`tests/bridge-router.spec.ts`、`scripts/e2e-tui-subagent.sh` | `v0.2.0-rc.1` |
@@ -84,23 +86,23 @@
 
 | 功能 | 状态 | 路由/实现 | 验证方式 | 最后更新 |
 |---|---|---|---|---|
-| 命令列表 | ✅ | `GET /command`、`GET /api/command` 注册 `/preset` `/goal` `/help` | `e2e-api.sh`、`tests/bridge-router.spec.ts` | 本提交 |
+| 命令列表 | ✅ | `GET /api/command` 注册 `/preset` `/goal` `/help` | `e2e-api.sh`、`tests/bridge-router.spec.ts` | 本提交 |
 | `/goal` 创建/查看/切换 | ✅ | `src/bridge/router.ts` `runGoalCommand` + dsh command registry | `tests/bridge-router.spec.ts`、`scripts/e2e-api-goal.sh` | 本提交 |
 | `/goal` 生命周期（complete/pause/resume/clear） | ✅ | `complete` 走 `goal.complete` RPC，其余走 registry | `tests/bridge-router.spec.ts`、`scripts/e2e-api-goal.sh` | 本提交 |
 | TUI `/help` 能力摘要 | ✅ | `src/help.ts` `ocHelp` + `runHelpCommand`（不触发模型轮次） | `tests/bridge-router.spec.ts`、`e2e-api.sh` | 本提交 |
 | TUI `/help` pane e2e | ✅ | `scripts/e2e-tui-command.sh` 输入 `/help` 断言摘要可见 | `bash scripts/e2e-tui-command.sh` | 本提交 |
-| `/compact` / summarize | ✅ | `POST /session/:id/summarize`、`POST /session/:id/compact`、`POST /api/session/:id/compact` | `e2e-api.sh`、`tests/bridge-router.spec.ts` | 本提交 |
-| Skills 目录 | ✅ | `GET /skill`、`GET /api/skill` 经 dsh `skill.list`（按目录匹配会话；无会话返回 `[]`） | `tests/bridge-router.spec.ts`、`e2e-api.sh` | 本提交 |
+| `/compact` / summarize | ✅ | `POST /api/session/:id/compact` | `e2e-api.sh`、`tests/bridge-router.spec.ts` | 本提交 |
+| Skills 目录 | ✅ | `GET /api/skill` 经 dsh `skill.list`（按目录匹配会话；无会话返回 `[]`） | `tests/bridge-router.spec.ts`、`e2e-api.sh` | 本提交 |
 | Skills 斜杠命令 | ✅ | `/command` 暴露技能名；命令路由转 `session.prompt` 的 `/name` 路径 | `tests/bridge-router.spec.ts` | 本提交 |
 | 技能斜杠命令 TUI e2e | ✅ | `scripts/e2e-tui-skill.sh`（`DSH_OC_E2E_FAKE_SKILLS` 注入 + 真实键盘输入） | `bash scripts/e2e-tui-skill.sh` | 本提交 |
-| References / integrations | ❌ | `GET /reference`、`GET /api/reference`、`GET /integration` 等返回 schema-valid `[]` | `e2e-api.sh` | `f30b156` |
+| References / integrations | ❌ | `GET /api/reference`、`GET /api/integration` 等返回 schema-valid `[]` | `e2e-api.sh` | `f30b156` |
 
 ## 7. TUI
 
 | 功能 | 状态 | 路由/实现 | 验证方式 | 最后更新 |
 |---|---|---|---|---|
-| `opencode attach` 启动/退出/信号转发 | ✅ | `src/tui/index.ts` `startOpenCodeTui` | `tests/tui/index.spec.ts`、`e2e-tui-boot.sh` | `f30b156` |
-| attach 参数过滤（`--session/--dir/--mini/--print-logs/...`） | ✅ | `src/tui/index.ts` `filterSupportedArgs`；`--dir` 同步写入 bridge cwd | `tests/tui/index.spec.ts`、`scripts/e2e-tui-dir.sh` | 本提交 |
+| `opencode --server` 启动/退出/信号转发 | ✅ | `src/tui/index.ts` `startOpenCodeTui`（`--mini` → `opencode mini --server`） | `tests/tui/index.spec.ts`、`e2e-tui-boot.sh` | `f30b156` |
+| TUI 参数过滤（`--session/--dir/--mini/--print-logs/...`） | ✅ | `src/tui/index.ts` `filterSupportedArgs`；`--dir` 同步写入 bridge cwd | `tests/tui/index.spec.ts`、`scripts/e2e-tui-dir.sh` | 本提交 |
 | `--dir` 路径校验 | ✅ | `resolveTuiDir`：不存在/非目录时明确报错 | `tests/tui/index.spec.ts` | 本提交 |
 | 数据隔离（config/data/state/cache 在 `$DSH_HOME/opencode`） | ✅ | `src/tui/index.ts` `buildChildEnv` | `tests/tui/index.spec.ts` | `f30b156` |
 | 消息时间戳默认开启 | ✅ | `DSH_OC_TUI_TIMESTAMPS=1` → `kv.json` `timestamps: show` + `tui.json` 快捷键 | `tests/tui/index.spec.ts`、`scripts/e2e-tui-timestamps.sh` | 本提交 |
@@ -115,9 +117,9 @@
 
 | 功能 | 状态 | 路由/实现 | 验证方式 | 最后更新 |
 |---|---|---|---|---|
-| 多 arch 平台矩阵（linux/darwin/windows × x64/arm64 + musl/baseline） | ✅ | `src/tui/platform.ts`、`opencode-assets.json` | `tests/tui/platform.spec.ts`、`tests/scaffold.spec.ts` | 本提交 |
-| 官方 npm 平台包优先（`opencode-<platform>-<arch>[-baseline][-musl]@1.18.18`） | ✅ | `src/tui/binary.ts` `npmPackage*`、`$DSH_HOME/opencode/packages/<key>` | `tests/tui/binary.spec.ts`（候选顺序/回退） | 本提交 |
-| GitHub Release fallback 按平台独立 `sha256` 校验 | ✅ | `src/tui/download.ts`、`opencode-assets.json` | `tests/tui/download.spec.ts`、`tests/scaffold.spec.ts` | `f30b156` |
+| 多 arch 平台矩阵（linux/darwin/windows × x64/arm64 + musl/baseline） | ✅ | `src/tui/platform.ts` | `tests/tui/platform.spec.ts`、`tests/scaffold.spec.ts` | 本提交 |
+| 官方 npm 平台包优先（`@opencode/cli-<platform>-<arch>[-baseline][-musl]@2.1.0`） | ✅ | `src/tui/binary.ts` `npmPackage*`、`$DSH_HOME/opencode/packages/<key>` | `tests/tui/binary.spec.ts`（候选顺序/回退） | 本提交 |
+| GitHub Release fallback 按平台独立 `sha256` 校验 | ❌ | 2.1.0 迁移已删除 `opencode-assets.json` 与该 fallback，改为只从 npm 平台包取二进制 | `tests/tui/download.spec.ts`、`tests/scaffold.spec.ts` | 本提交 |
 | 代理 / 镜像 | ✅ | `src/tui/download.ts` `resolveAssetUrl` | `tests/tui/download.spec.ts` | `f30b156` |
 
 ## 9. 测试
@@ -131,14 +133,14 @@
 | 离线启动 / 版本锁定 e2e | ✅ | `scripts/e2e-tui-offline.sh`、`scripts/e2e-tui-version-lock.sh` | 对应脚本输出 `PASSED` | 本提交 |
 | Help e2e | ✅ | `scripts/e2e-tui-help.sh` | `bash scripts/e2e-tui-help.sh` | 本提交 |
 | 品牌 logo e2e | ✅ | `scripts/e2e-tui-brand.sh` | `bash scripts/e2e-tui-brand.sh` | 本提交 |
-| `--dir` attach e2e | ✅ | `scripts/e2e-tui-dir.sh` | `bash scripts/e2e-tui-dir.sh` | 本提交 |
+| `--dir` TUI e2e | ✅ | `scripts/e2e-tui-dir.sh` | `bash scripts/e2e-tui-dir.sh` | 本提交 |
 | `--dir` 相对路径 e2e | ✅ | `scripts/e2e-tui-dir.sh` 使用相对 `sub-project` | `bash scripts/e2e-tui-dir.sh` | 本提交 |
 | `--dir` 目录过滤 e2e | ✅ | `scripts/e2e-tui-dir-filter.sh`：新会话落在子目录、根会话被过滤 | `bash scripts/e2e-tui-dir-filter.sh` | 本提交 |
-| `--fork --session` attach e2e | ✅ | `scripts/e2e-tui-fork.sh` | `bash scripts/e2e-tui-fork.sh` | 本提交 |
-| `--continue` attach e2e | ✅ | `scripts/e2e-tui-continue.sh`（恢复最新会话） | `bash scripts/e2e-tui-continue.sh` | 本提交 |
-| `--mini` attach + 回复 e2e | ✅ | `scripts/e2e-tui-mini.sh`：输入 prompt、断言回复且只渲染一次 | `bash scripts/e2e-tui-mini.sh` | 本提交 |
+| `--fork --session` TUI e2e | ✅ | `scripts/e2e-tui-fork.sh` | `bash scripts/e2e-tui-fork.sh` | 本提交 |
+| `--continue` TUI e2e | ✅ | `scripts/e2e-tui-continue.sh`（恢复最新会话） | `bash scripts/e2e-tui-continue.sh` | 本提交 |
+| `--mini` TUI + 回复 e2e | ✅ | `scripts/e2e-tui-mini.sh`：输入 prompt、断言回复且只渲染一次 | `bash scripts/e2e-tui-mini.sh` | 本提交 |
 | 退出 splash 说明（全量/`--mini`） | 🟡 | 官方二进制渲染，无法替换；会话有内容（新输入或恢复历史）时 dsh-oc 在下方补一行提示（id 为 dsh 会话 id，恢复用 `dsh --profile oc --session`） | `tests/bridge-router.spec.ts`、`scripts/e2e-tui-mini.sh` | 本提交 |
-| Esc 打断/取消（全量/`--mini`） | ✅ | `turn.wait`/`turn.idle` 事件驱动 TUI 运行态；`POST /session/:id/abort` → `session.cancel` 停止在途流（全量与 mini 均按两次 Esc） | `tests/bridge-events.spec.ts`、`scripts/e2e-tui-abort.sh` | 本提交 |
+| Esc 打断/取消（全量/`--mini`） | ✅ | `turn.wait`/`turn.idle` 事件驱动 TUI 运行态；`POST /api/session/:id/interrupt` → `session.cancel` 停止在途流（全量与 mini 均按两次 Esc） | `tests/bridge-events.spec.ts`、`scripts/e2e-tui-abort.sh` | 本提交 |
 | 新会话继承最近 preset | ✅ | `/preset X` 选择记录到 bridge 状态，`/new` 创建的新会话沿用该 preset（工具集随之变化） | `tests/bridge-router.spec.ts` | 本提交 |
 | `--print-logs` 透传 e2e | ✅ | `scripts/e2e-tui-print-logs.sh`（fake 二进制 argv 断言） | `bash scripts/e2e-tui-print-logs.sh` | 本提交 |
 | 协议探针（路由清单 + 二进制/SDK 版本校验） | ✅ | `scripts/probe-opencode.mjs`、`tests/fixtures/opencode/routes.json` | `pnpm run probe`、`tests/protocol-probe.spec.ts` | 本提交 |
@@ -151,10 +153,22 @@
 | 历史读取在途合并与派生页缓存 | ✅ | 并发调用/启动预取共享同一次 `session.list`/`session.history` RPC；full tail 与 100 条页互相派生，TUI 打开会话只扫描一次 | `tests/bridge-router.spec.ts` | 本提交 |
 | perf 生成器单测（编码/round-trip/子代理场景） | ✅ | `tests/perf.spec.ts` | `pnpm test` | 本提交 |
 
+## 10. 浏览器与 Web UI
+
+| 功能 | 状态 | 路由/实现 | 验证方式 | 最后更新 |
+|---|---|---|---|---|
+| 官方 OpenCode Web UI 与 API 同源提供 | ✅ | `src/bridge/web-ui.ts`：opencode 二进制里的 AppArchive 解到 `$DSH_HOME/opencode/web-ui/<version>/`（`DSH_OC_WEB_UI` 优先）；未匹配路由的 `GET`/`HEAD` 回落到 SPA shell，`_assets/`、`icons/` 缺失 404 | `tests/bridge-web-ui.spec.ts` | 本提交 |
+| 官方 Web UI 的浏览器实测 | 🟡 | 服务已就绪、官方 2.1.0 客户端能订阅 `/api/event`；本机没有真实浏览器，交互验证未做 | 需在有浏览器的环境手工验证 | 本提交 |
+| CORS 策略（对齐官方 server） | ✅ | `src/bridge/http.ts` `isAllowedCorsOrigin`/`corsHeaders`：localhost、127.0.0.1、`oc://renderer`、tauri 源、`*.opencode.ai`，加上 `DSH_OC_CORS`；回显请求 origin 并带 `Access-Control-Allow-Credentials: true` | `tests/bridge-cors.spec.ts` | 本提交 |
+| 项目列表（bridge 工作目录） | ✅ | `GET /api/project`、`GET /api/project/:projectID`、`PATCH /api/project/:projectID`（`projectInfo`；PATCH 只回显不落盘） | `tests/bridge-web-ui.spec.ts` | 本提交 |
+| SSE 心跳（防客户端判定流已死） | ✅ | `src/bridge/sse.ts` 每 15 秒写一帧 `: heartbeat\n\n`（官方 server 同样式） | 暂无单测覆盖 | 本提交 |
+| SSE status 快照有界 | ✅ | `src/bridge/router.ts` `SESSION_STATUS_SNAPSHOT_LIMIT = 20`（运行中的会话 + 最近触碰的会话） | 暂无单测覆盖 | 本提交 |
+| HTTP 请求追踪 | ✅ | `DSH_OC_HTTP_LOG=1` → stderr 逐行 `[bridge/http] <METHOD> <path>` | 手工验证 | 本提交 |
+
 <!-- FEATURES:AUTO:START -->
 ## 自动追踪（脚本生成）
 
-> 运行 `pnpm run features:update` 重新生成。生成时 HEAD：`1207737`（2026-09-11）。
+> 运行 `pnpm run features:update` 重新生成。生成时 HEAD：`d2c4c7c`（2026-09-11）。
 
 ### 路由注册表
 
@@ -178,27 +192,37 @@
 | 测试文件 | 用例数 | 最后更新 |
 |---|---|---|
 | `tests/bin.spec.ts` | 5 | 050803b chore(release): bump version to 0.1.0 for first release |
+| `tests/bridge-cors.spec.ts` | 6 | — |
 | `tests/bridge-errors.spec.ts` | 1 | fd1e411 feat(bridge): integrate dsh 0.1.2 host services |
-| `tests/bridge-events.spec.ts` | 89 | aade0a7 fix(bridge): expose the live provisional assistant to history reads |
+| `tests/bridge-events.spec.ts` | 89 | 9a0d9ef fix(bridge): label first-turn provisional cards with session model and preset |
 | `tests/bridge-fs.spec.ts` | 5 | 2fc8dea feat(bridge): return extension-aware content types from fs read |
-| `tests/bridge-git.spec.ts` | 6 | cec436e perf(bridge): merge vcs status numstat into one HEAD diff pass |
-| `tests/bridge-router.spec.ts` | 146 | 3dc26cf feat(bridge): adapt to dsh 0.1.5 host ABI and assistant stream model |
+| `tests/bridge-git.spec.ts` | 1 | cec436e perf(bridge): merge vcs status numstat into one HEAD diff pass |
+| `tests/bridge-router.spec.ts` | 138 | 9a0d9ef fix(bridge): label first-turn provisional cards with session model and preset |
+| `tests/bridge-web-ui.spec.ts` | 8 | — |
+| `tests/contract/client.spec.ts` | 12 | — |
+| `tests/contract/events.spec.ts` | 19 | — |
+| `tests/contract/revert.spec.ts` | 8 | — |
+| `tests/contract/routes.spec.ts` | 1 | — |
 | `tests/convert/goal.spec.ts` | 5 | 34f5695 feat(bridge): goal projection, /goal command and sidebar todo merge |
-| `tests/convert/message.spec.ts` | 25 | 3dc26cf feat(bridge): adapt to dsh 0.1.5 host ABI and assistant stream model |
-| `tests/convert/model.spec.ts` | 7 | fd1e411 feat(bridge): integrate dsh 0.1.2 host services |
+| `tests/convert/message.spec.ts` | 9 | 3dc26cf feat(bridge): adapt to dsh 0.1.5 host ABI and assistant stream model |
+| `tests/convert/model.spec.ts` | 6 | fd1e411 feat(bridge): integrate dsh 0.1.2 host services |
 | `tests/convert/permission.spec.ts` | 4 | 0af3147 feat(bridge): opencode-compatible HTTP/SSE bridge over dsh api proxy |
 | `tests/convert/question.spec.ts` | 5 | 0af3147 feat(bridge): opencode-compatible HTTP/SSE bridge over dsh api proxy |
 | `tests/convert/session.spec.ts` | 8 | d6c834f fix(bridge): preserve subagent metadata and canonical order |
 | `tests/convert/todo.spec.ts` | 3 | 0af3147 feat(bridge): opencode-compatible HTTP/SSE bridge over dsh api proxy |
 | `tests/convert/tool.spec.ts` | 19 | 3dc26cf feat(bridge): adapt to dsh 0.1.5 host ABI and assistant stream model |
+| `tests/e2e/events.spec.ts` | 1 | — |
+| `tests/e2e/openchamber.spec.ts` | 1 | — |
+| `tests/e2e/revert.spec.ts` | 1 | — |
 | `tests/perf.spec.ts` | 5 | fb50dbe fix(perf): write v3 session generation filenames |
-| `tests/protocol-probe.spec.ts` | 2 | de7fe57 feat(probe): protocol route/version probe with missing-route reporting |
+| `tests/protocol-probe.spec.ts` | 1 | de7fe57 feat(probe): protocol route/version probe with missing-route reporting |
 | `tests/replay-corpus.spec.ts` | 2 | fd1e411 feat(bridge): integrate dsh 0.1.2 host services |
-| `tests/scaffold.spec.ts` | 12 | 3dc26cf feat(bridge): adapt to dsh 0.1.5 host ABI and assistant stream model |
+| `tests/rewind/rewind.spec.ts` | 12 | — |
+| `tests/scaffold.spec.ts` | 10 | 3dc26cf feat(bridge): adapt to dsh 0.1.5 host ABI and assistant stream model |
 | `tests/tui/binary.spec.ts` | 18 | ef1419f feat(tui): disable opencode auto-update/background network and enforce version lock |
 | `tests/tui/branding-art.spec.ts` | 3 | 3c3984c feat(tui): generate DSH OC home logo with figlet tooling |
-| `tests/tui/download.spec.ts` | 7 | 81920ee feat(tui): opencode binary resolution, download, spawn and signal handling |
-| `tests/tui/index.spec.ts` | 36 | fd1e411 feat(bridge): integrate dsh 0.1.2 host services |
+| `tests/tui/download.spec.ts` | 5 | 81920ee feat(tui): opencode binary resolution, download, spawn and signal handling |
+| `tests/tui/index.spec.ts` | 37 | fd1e411 feat(bridge): integrate dsh 0.1.2 host services |
 | `tests/tui/platform.spec.ts` | 7 | 81920ee feat(tui): opencode binary resolution, download, spawn and signal handling |
 
 ### 关键实现最后更新
@@ -214,9 +238,10 @@
 | `src/bridge/convert/session.ts` | caff946 fix(bridge): keep reasoning effort in sync |
 | `src/bridge/convert/todo.ts` | 0af3147 feat(bridge): opencode-compatible HTTP/SSE bridge over dsh api proxy |
 | `src/bridge/convert/tool.ts` | 3dc26cf feat(bridge): adapt to dsh 0.1.5 host ABI and assistant stream model |
+| `src/bridge/convert/wire.ts` | — |
 | `src/bridge/dsh-types.ts` | 3dc26cf feat(bridge): adapt to dsh 0.1.5 host ABI and assistant stream model |
 | `src/bridge/errors.ts` | fd1e411 feat(bridge): integrate dsh 0.1.2 host services |
-| `src/bridge/events-util.ts` | caff946 fix(bridge): keep reasoning effort in sync |
+| `src/bridge/events-util.ts` | 9a0d9ef fix(bridge): label first-turn provisional cards with session model and preset |
 | `src/bridge/events.ts` | aade0a7 fix(bridge): expose the live provisional assistant to history reads |
 | `src/bridge/file-uploads.ts` | 3dc26cf feat(bridge): adapt to dsh 0.1.5 host ABI and assistant stream model |
 | `src/bridge/fs.ts` | 2fc8dea feat(bridge): return extension-aware content types from fs read |
@@ -224,21 +249,24 @@
 | `src/bridge/http.ts` | fd1e411 feat(bridge): integrate dsh 0.1.2 host services |
 | `src/bridge/index.ts` | 3dc26cf feat(bridge): adapt to dsh 0.1.5 host ABI and assistant stream model |
 | `src/bridge/router-entry.ts` | 6928f8a feat(bridge): expose router entry and add minimal-server renderer attribution |
-| `src/bridge/router.ts` | aade0a7 fix(bridge): expose the live provisional assistant to history reads |
+| `src/bridge/router.ts` | 9a0d9ef fix(bridge): label first-turn provisional cards with session model and preset |
 | `src/bridge/routes.ts` | 5f6aad0 feat(bridge): serve workspace files over /api/fs with wildcard routing |
 | `src/bridge/routes/boot.ts` | 0637c81 fix(bridge): advertise the configured default preset as the TUI's first agent |
 | `src/bridge/routes/fs.ts` | 2fc8dea feat(bridge): return extension-aware content types from fs read |
-| `src/bridge/routes/permission.ts` | fd1e4b5 feat(bridge): add SDK v2 permission reply alias route |
-| `src/bridge/routes/session-v1.ts` | aade0a7 fix(bridge): expose the live provisional assistant to history reads |
+| `src/bridge/routes/session-v2-extra.ts` | — |
 | `src/bridge/routes/session-v2.ts` | aade0a7 fix(bridge): expose the live provisional assistant to history reads |
-| `src/bridge/routes/vcs.ts` | c281121 feat(bridge): serve real git info, status and diffs over /vcs |
+| `src/bridge/routes/v2-client-compat.ts` | — |
+| `src/bridge/routes/v2-shapes.ts` | — |
+| `src/bridge/routes/v2-stubs.ts` | — |
 | `src/bridge/rpc.ts` | 3dc26cf feat(bridge): adapt to dsh 0.1.5 host ABI and assistant stream model |
-| `src/bridge/shell.ts` | 4f7d316 fix(build): stabilize shell context artifacts |
+| `src/bridge/shell.ts` | 9a0d9ef fix(bridge): label first-turn provisional cards with session model and preset |
 | `src/bridge/sse.ts` | 87d78ef fix(bridge): restore prompt order and native subagent tasks |
 | `src/bridge/state.ts` | 468c05f feat(bridge): add shell mode and settle preset cards |
 | `src/bridge/stubs.ts` | c281121 feat(bridge): serve real git info, status and diffs over /vcs |
+| `src/bridge/web-ui.ts` | — |
 | `src/help.ts` | 468c05f feat(bridge): add shell mode and settle preset cards |
 | `src/index.ts` | 3dc26cf feat(bridge): adapt to dsh 0.1.5 host ABI and assistant stream model |
+| `src/rewind/index.ts` | — |
 | `src/tui/binary.ts` | ef1419f feat(tui): disable opencode auto-update/background network and enforce version lock |
 | `src/tui/brand.ts` | eba383f feat(tui): print DSH OC brand before --mini launches |
 | `src/tui/download.ts` | 81920ee feat(tui): opencode binary resolution, download, spawn and signal handling |
@@ -250,6 +278,7 @@
 | `scripts/audit-local-sessions.sh` | fb50dbe fix(perf): write v3 session generation filenames |
 | `scripts/build-replay-corpus.mjs` | 3dc26cf feat(bridge): adapt to dsh 0.1.5 host ABI and assistant stream model |
 | `scripts/check-all.sh` | db87e31 fix(release): verify local dsh-oc resolution |
+| `scripts/check-client-routes.mjs` | — |
 | `scripts/cleanup-e2e-runs.sh` | ec31177 chore: add e2e run directory cleanup script |
 | `scripts/cleanup-merged-branches.sh` | 2f1ab51 chore(scripts): enumerate remote merged branches for cleanup |
 | `scripts/e2e-api-attachment.sh` | cfddd26 test(e2e): cover attachment acceptance and readable rejections |
@@ -260,12 +289,15 @@
 | `scripts/e2e-golden-trace.sh` | 81effdd feat(tui): add candidate opencode upgrade lane with golden trace diff |
 | `scripts/e2e-install-rollback.sh` | dacd2a2 chore(release): prepare v0.2.0-rc.3 |
 | `scripts/e2e-minimal-server-repro.sh` | a603d6a test(e2e): add raw SSE replay mode and full-trace real repro |
+| `scripts/e2e-openchamber-bootstrap.mjs` | — |
+| `scripts/e2e-openchamber.mjs` | — |
 | `scripts/e2e-queued-order-repro.sh` | b72e076 test(e2e): make queued-order QUEUED badge deterministic in CI |
 | `scripts/e2e-real-llm.sh` | 609ccd6 test(real): strengthen real-llm queue FIFO and TUI delivery assertions |
 | `scripts/e2e-real-queued-order.sh` | a603d6a test(e2e): add raw SSE replay mode and full-trace real repro |
 | `scripts/e2e-recovery-consistency.sh` | 008d2ff test(e2e): add crash and SSE-reconnect recovery fault domains |
 | `scripts/e2e-recovery-crash.sh` | 54e2d60 test(recovery): align crash oracle with dsh 0.1.5 stream semantics |
 | `scripts/e2e-recovery-sse-reconnect.sh` | 008d2ff test(e2e): add crash and SSE-reconnect recovery fault domains |
+| `scripts/e2e-revert-flow.mjs` | — |
 | `scripts/e2e-tui-abort.sh` | 59074e9 fix(e2e): align status and mini abort oracles |
 | `scripts/e2e-tui-agent-lock.sh` | 1c1e685 test(e2e): cover locked agent switching in the real TUI |
 | `scripts/e2e-tui-agent-tab.sh` | 2196ea7 fix(bridge): treat an already-effective agent preset as a no-op |
@@ -296,6 +328,7 @@
 | `scripts/e2e-tui-tools.sh` | 3dc26cf feat(bridge): adapt to dsh 0.1.5 host ABI and assistant stream model |
 | `scripts/e2e-tui-turn.sh` | b05d5c9 fix(bridge): keep live message identity stable |
 | `scripts/e2e-tui-version-lock.sh` | ef1419f feat(tui): disable opencode auto-update/background network and enforce version lock |
+| `scripts/extract-opencode-web-ui.mjs` | — |
 | `scripts/flake-mini-scan.sh` | 04239f6 fix(test): keep flake scan observe-only |
 | `scripts/generate-tui-branding-art.mjs` | 3c3984c feat(tui): generate DSH OC home logo with figlet tooling |
 | `scripts/minimal-oc-server.mjs` | fd1e411 feat(bridge): integrate dsh 0.1.2 host services |

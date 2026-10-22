@@ -9,7 +9,7 @@ source tests/e2e/common.sh
 
 SCRIPT_START=$SECONDS
 E2E_ACTIVE_SESSION=""
-# Observe only the exact official opencode attach PID discovered by the
+# Observe only the exact official opencode TUI PID discovered by the
 # shared helper; never scan or terminate unrelated processes.
 export DSH_OC_E2E_MONITOR_IO=1
 cleanup() {
@@ -37,9 +37,9 @@ SEED_URL="$E2E_BRIDGE_URL"
 seed_session() {
   local text="$1"
   local session
-  session="$(curl -s -X POST "$SEED_URL/session" -H 'Content-Type: application/json' -d '{}' | jq -er .id)"
-  curl -s -X POST "$SEED_URL/session/$session/message" -H 'Content-Type: application/json' \
-    -d "{\"parts\":[{\"type\":\"text\",\"text\":\"$text\"}]}" | jq -e '.info.role == "assistant"' >/dev/null
+  session="$(curl -s -X POST "$SEED_URL/api/session" -H 'Content-Type: application/json' -d '{}' | jq -er .data.id)"
+  curl -s -X POST "$SEED_URL/api/session/$session/prompt" -H 'Content-Type: application/json' \
+    -d "{\"parts\":[{\"type\":\"text\",\"text\":\"$text\"}]}" | jq -e '.data.sessionID != null' >/dev/null
   echo "$session"
 }
 
@@ -63,12 +63,12 @@ wait_assistant_text() {
   return 1
 }
 
-wait_assistant_text "$SEED_URL/session/$PLAIN_SESSION/message" "mock response recovered"
+wait_assistant_text "$SEED_URL/api/session/$PLAIN_SESSION/message" "mock response recovered"
 echo "  plain session has assistant reply"
-wait_assistant_text "$SEED_URL/session/$TOOL_SESSION/message" "mock response recovered"
+wait_assistant_text "$SEED_URL/api/session/$TOOL_SESSION/message" "mock response recovered"
 echo "  tool session has assistant reply"
 
-LIST_TITLE="$(curl -s "$SEED_URL/session" | jq -r --arg id "$TOOL_SESSION" '[.[] | select(.id == $id)][0].title')"
+LIST_TITLE="$(curl -s "$SEED_URL/api/session" | jq -r --arg id "$TOOL_SESSION" '[.data[] | select(.id == $id)][0].title')"
 WORK_BASENAME="$(basename "$E2E_WORKDIR")"
 if [[ -z "$LIST_TITLE" || "$LIST_TITLE" == "$WORK_BASENAME" ]]; then
   echo "e2e: session list lacks a durable title (got: $LIST_TITLE)" >&2
@@ -76,13 +76,13 @@ if [[ -z "$LIST_TITLE" || "$LIST_TITLE" == "$WORK_BASENAME" ]]; then
 fi
 echo "  session list shows durable title: $LIST_TITLE"
 
-TOOL_TEXT="$(curl -s "$SEED_URL/session/$TOOL_SESSION/message" | jq -r '[.. | objects | select(has("tool") and .type == "tool") | .tool] | join(" ")')"
+TOOL_TEXT="$(curl -s "$SEED_URL/api/session/$TOOL_SESSION/message" | jq -r '[.. | objects | select(.type == "tool") | .name] | join(" ")')"
 if [[ "$TOOL_TEXT" != *bash* ]]; then
   echo "e2e: tool session has no bash tool card: $TOOL_TEXT" >&2
   exit 1
 fi
 echo "  tool session tool card: $TOOL_TEXT"
-TOOL_COUNT="$(curl -s "$SEED_URL/session/$TOOL_SESSION/message" | jq '[.. | objects | select(.type == "tool")] | length')"
+TOOL_COUNT="$(curl -s "$SEED_URL/api/session/$TOOL_SESSION/message" | jq '[.. | objects | select(.type == "tool")] | length')"
 if [[ "$TOOL_COUNT" != "1" ]]; then
   echo "e2e: expected exactly one tool part in history, got $TOOL_COUNT" >&2
   exit 1
@@ -130,9 +130,9 @@ echo "  seeded content visible: \"$SEED_HINT\""
 # visible user card before its assistant reply. Check both the durable API
 # order and the short real-TUI pane capture so a timestamp-only fix cannot
 # silently leave the first card hidden behind the reply.
-SEED_HISTORY="$(curl -s "$TUI_URL/session/$TOOL_SESSION/message")"
-SEED_USER_COUNT="$(jq '[.[] | select(.info.role == "user")] | length' <<<"$SEED_HISTORY")"
-SEED_ASSISTANT_COUNT="$(jq '[.[] | select(.info.role == "assistant")] | length' <<<"$SEED_HISTORY")"
+SEED_HISTORY="$(curl -s "$TUI_URL/api/session/$TOOL_SESSION/message")"
+SEED_USER_COUNT="$(jq '[.data[] | select(.type == "user")] | length' <<<"$SEED_HISTORY")"
+SEED_ASSISTANT_COUNT="$(jq '[.data[] | select(.type == "assistant")] | length' <<<"$SEED_HISTORY")"
 if [[ "$SEED_USER_COUNT" != "1" || "$SEED_ASSISTANT_COUNT" -lt "1" ]]; then
   echo "e2e: seed history role count invalid (user=$SEED_USER_COUNT assistant=$SEED_ASSISTANT_COUNT)" >&2
   exit 1
@@ -145,7 +145,7 @@ if [[ -n "$SEED_USER_LINE" && -n "$SEED_REPLY_LINE" && "$SEED_USER_LINE" -ge "$S
 fi
 echo "  first user/assistant order: API user=$SEED_USER_COUNT assistant=$SEED_ASSISTANT_COUNT"
 
-BEFORE_COUNT="$(curl -s "$TUI_URL/session/$TOOL_SESSION/message" | jq 'length')"
+BEFORE_COUNT="$(curl -s "$TUI_URL/api/session/$TOOL_SESSION/message" | jq '.data | length')"
 echo "== keyboard prompt =="
 tmux send-keys -t "$E2E_TUI_SESSION" "e2e tui prompt: hello" Enter
 
@@ -153,7 +153,7 @@ NEW_HINT=""
 deadline=$((SECONDS + 60))
 while (( SECONDS < deadline )); do
   e2e_tui_capture "$E2E_RUN_DIR/tui-turn-live.txt"
-  local_turn_text="$(curl -s "$TUI_URL/session/$TOOL_SESSION/message" | jq -r '[.. | objects | select(has("text")) | .text] | join(" ")' 2>/dev/null || true)"
+  local_turn_text="$(curl -s "$TUI_URL/api/session/$TOOL_SESSION/message" | jq -r '[.. | objects | select(has("text")) | .text] | join(" ")' 2>/dev/null || true)"
   if grep -qa "e2e tui prompt: hello" "$E2E_RUN_DIR/tui-turn-live.txt" \
     && [[ "$local_turn_text" == *"e2e tui prompt: hello"* && "$local_turn_text" == *"mock response recovered"* ]]; then
     NEW_HINT="user echoed and turn completed via API"
@@ -167,19 +167,19 @@ if [[ -z "$NEW_HINT" ]]; then
 fi
 echo "  new prompt visible: $NEW_HINT"
 
-AFTER_COUNT="$(curl -s "$TUI_URL/session/$TOOL_SESSION/message" | jq 'length')"
+AFTER_COUNT="$(curl -s "$TUI_URL/api/session/$TOOL_SESSION/message" | jq '.data | length')"
 if (( AFTER_COUNT <= BEFORE_COUNT )); then
   echo "e2e: session message count did not grow ($BEFORE_COUNT -> $AFTER_COUNT)" >&2
   exit 1
 fi
 echo "  session messages grew: $BEFORE_COUNT -> $AFTER_COUNT"
 
-FINAL_HISTORY="$(curl -s "$TUI_URL/session/$TOOL_SESSION/message")"
-FINAL_USER_COUNT="$(jq '[.[] | select(.info.role == "user")] | length' <<<"$FINAL_HISTORY")"
-FINAL_ASSISTANT_COUNT="$(jq '[.[] | select(.info.role == "assistant")] | length' <<<"$FINAL_HISTORY")"
-SEED_PROMPT_COUNT="$(jq '[.[] | select(.info.role == "user") | .parts[]?.text // empty | select(. == "e2e seed: tool session")] | length' <<<"$FINAL_HISTORY")"
-KEYBOARD_PROMPT_COUNT="$(jq '[.[] | select(.info.role == "user") | .parts[]?.text // empty | select(. == "e2e tui prompt: hello")] | length' <<<"$FINAL_HISTORY")"
-REPLY_COUNT="$(jq '[.[] | select(.info.role == "assistant") | .parts[]?.text // empty | select(. == "mock response recovered")] | length' <<<"$FINAL_HISTORY")"
+FINAL_HISTORY="$(curl -s "$TUI_URL/api/session/$TOOL_SESSION/message")"
+FINAL_USER_COUNT="$(jq '[.data[] | select(.type == "user")] | length' <<<"$FINAL_HISTORY")"
+FINAL_ASSISTANT_COUNT="$(jq '[.data[] | select(.type == "assistant")] | length' <<<"$FINAL_HISTORY")"
+SEED_PROMPT_COUNT="$(jq '[.data[] | select(.type == "user") | .text // empty | select(. == "e2e seed: tool session")] | length' <<<"$FINAL_HISTORY")"
+KEYBOARD_PROMPT_COUNT="$(jq '[.data[] | select(.type == "user") | .text // empty | select(. == "e2e tui prompt: hello")] | length' <<<"$FINAL_HISTORY")"
+REPLY_COUNT="$(jq '[.data[] | select(.type == "assistant") | .content[]?.text // empty | select(. == "mock response recovered")] | length' <<<"$FINAL_HISTORY")"
 FINAL_TOOL_COUNT="$(jq '[.. | objects | select(.type == "tool" and .tool == "bash")] | length' <<<"$FINAL_HISTORY")"
 if [[ "$FINAL_USER_COUNT" != "2" || "$FINAL_ASSISTANT_COUNT" -le "$SEED_ASSISTANT_COUNT" \
   || "$SEED_PROMPT_COUNT" != "1" || "$KEYBOARD_PROMPT_COUNT" != "1" || "$REPLY_COUNT" != "2" \

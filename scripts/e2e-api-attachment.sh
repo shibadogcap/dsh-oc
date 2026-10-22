@@ -26,30 +26,30 @@ e2e_start_dsh "$E2E_ACTIVE_SESSION"
 e2e_wait_bridge_url
 BRIDGE="$E2E_BRIDGE_URL"
 
-SID="$(curl -s -X POST "$BRIDGE/session" -H 'Content-Type: application/json' -d '{}' | jq -er .id)"
+SID="$(curl -s -X POST "$BRIDGE/api/session" -H 'Content-Type: application/json' -d '{}' | jq -er .data.id)"
 echo "  session $SID"
 
 echo "== text data-URL part =="
 CODE="$(curl -s -o "$E2E_RUN_DIR/text-data.json" -w '%{http_code}' \
-  -X POST "$BRIDGE/session/$SID/message" -H 'Content-Type: application/json' \
+  -X POST "$BRIDGE/api/session/$SID/prompt" -H 'Content-Type: application/json' \
   -d '{"parts":[{"type":"file","mime":"text/plain","filename":"hello.txt","url":"data:text/plain;base64,aGVsbG8gZnJvbSBkYXRh"}]}')"
 [[ "$CODE" == "200" ]]
-jq -e '.info.role == "assistant"' "$E2E_RUN_DIR/text-data.json" >/dev/null
+jq -e --arg s "$SID" '.data.sessionID == $s' "$E2E_RUN_DIR/text-data.json" >/dev/null
 echo "  text data-URL accepted (200)"
 
 echo "== local file part inside the session cwd =="
 printf 'hello from local file\n' > "$E2E_WORKDIR/notes.txt"
 CODE="$(curl -s -o "$E2E_RUN_DIR/text-local.json" -w '%{http_code}' \
-  -X POST "$BRIDGE/session/$SID/prompt" -H 'Content-Type: application/json' \
+  -X POST "$BRIDGE/api/session/$SID/prompt" -H 'Content-Type: application/json' \
   -d "{\"parts\":[{\"type\":\"file\",\"mime\":\"text/plain\",\"filename\":\"notes.txt\",\"url\":\"file://$E2E_WORKDIR/notes.txt\"}]}")"
 [[ "$CODE" == "200" ]]
-jq -e '.info.role == "assistant"' "$E2E_RUN_DIR/text-local.json" >/dev/null
+jq -e --arg s "$SID" '.data.sessionID == $s' "$E2E_RUN_DIR/text-local.json" >/dev/null
 echo "  local text file accepted (200)"
 
 echo "== image part on a model without image support =="
 PNG="$(printf 'png' | base64)"
 CODE="$(curl -s -o "$E2E_RUN_DIR/image.json" -w '%{http_code}' \
-  -X POST "$BRIDGE/session/$SID/message" -H 'Content-Type: application/json' \
+  -X POST "$BRIDGE/api/session/$SID/prompt" -H 'Content-Type: application/json' \
   -d "{\"parts\":[{\"type\":\"file\",\"mime\":\"image/png\",\"filename\":\"pic.png\",\"url\":\"data:image/png;base64,$PNG\"}]}")"
 [[ "$CODE" == "400" ]]
 jq -e '.data.code == "attachment-error" and .data.details.reason == "MODEL_DOES_NOT_SUPPORT_IMAGES"' "$E2E_RUN_DIR/image.json" >/dev/null
@@ -59,7 +59,7 @@ echo "== file outside the session cwd =="
 OUTSIDE="$(mktemp -d)"
 printf 'outside\n' > "$OUTSIDE/out.txt"
 CODE="$(curl -s -o "$E2E_RUN_DIR/outside.json" -w '%{http_code}' \
-  -X POST "$BRIDGE/session/$SID/message" -H 'Content-Type: application/json' \
+  -X POST "$BRIDGE/api/session/$SID/prompt" -H 'Content-Type: application/json' \
   -d "{\"parts\":[{\"type\":\"file\",\"mime\":\"text/plain\",\"filename\":\"out.txt\",\"url\":\"file://$OUTSIDE/out.txt\"}]}")"
 [[ "$CODE" == "400" ]]
 jq -e '.data.message | test("inside the session cwd")' "$E2E_RUN_DIR/outside.json" >/dev/null

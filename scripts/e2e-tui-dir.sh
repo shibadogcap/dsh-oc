@@ -22,7 +22,7 @@ e2e_new_run "tui-dir" "danger-full-access" "success" "1"
 mkdir -p "$E2E_WORKDIR/sub-project"
 SUB_DIR="sub-project"
 
-echo "== boot real opencode attach with --dir =="
+echo "== boot real opencode TUI with --dir =="
 e2e_tui_start "--dir $SUB_DIR"
 e2e_tui_wait_attach
 

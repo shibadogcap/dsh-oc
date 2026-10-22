@@ -1,13 +1,8 @@
-import { spawnSync } from 'node:child_process'
-import { createHash } from 'node:crypto'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
-import { createServer, type Server } from 'node:http'
-import type { AddressInfo } from 'node:net'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { downloadOpenCode, resolveAssetUrl } from '../../src/tui/download.ts'
-import type { OpenCodeAssetsManifest } from '../../src/types.ts'
 import type { PlatformSelection } from '../../src/tui/platform.ts'
 
 const linuxPlatform: PlatformSelection = {
@@ -21,79 +16,13 @@ const linuxPlatform: PlatformSelection = {
   executableName: 'opencode',
 }
 
-let fixtureDir: string
-let archive: Buffer
-let server: Server
-let requests: string[]
-let handler: (requestPath: string, response: import('node:http').ServerResponse) => void
-
-beforeAll(async () => {
-  fixtureDir = mkdtempSync(join(tmpdir(), 'dsh-oc-tui-download-'))
-  const bin = join(fixtureDir, 'opencode')
-  writeFileSync(bin, '#!/bin/sh\nprintf "opencode 1.18.18\\n"\n')
-  chmodSync(bin, 0o755)
-  const archivePath = join(fixtureDir, 'fixture.tar.gz')
-  const packed = spawnSync('tar', ['-czf', archivePath, '-C', fixtureDir, 'opencode'], { encoding: 'utf8' })
-  if (packed.status !== 0) throw new Error(`fixture tar failed: ${String(packed.stderr)}`)
-  archive = readFileSync(archivePath)
-
-  requests = []
-  handler = (_path, response) => {
-    response.writeHead(404)
-    response.end()
-  }
-  server = createServer((request, response) => {
-    const path = request.url ?? ''
-    requests.push(path)
-    handler(path, response)
-  })
-  await new Promise<void>((resolve, reject) => {
-    server.once('error', reject)
-    server.listen(0, '127.0.0.1', () => {
-      server.off('error', reject)
-      resolve()
-    })
-  })
-})
-
-afterAll(async () => {
-  await new Promise<void>((resolve, reject) => {
-    server.close(error => (error === undefined ? resolve() : reject(error)))
-  })
-  rmSync(fixtureDir, { recursive: true, force: true })
-})
-
 const homes: string[] = []
 
-beforeEach(() => {
-  requests = []
-  handler = (_path, response) => {
-    response.writeHead(404)
-    response.end()
-  }
-})
+beforeEach(() => {})
 
 afterEach(() => {
   for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true })
 })
-
-function baseUrl(): string {
-  const address = server.address() as AddressInfo
-  return `http://127.0.0.1:${address.port}`
-}
-
-function manifestFor(path: string, bytes = archive): OpenCodeAssetsManifest {
-  return {
-    version: '1.18.18',
-    assets: {
-      'linux-x64': {
-        url: `${baseUrl()}${path}`,
-        sha256: createHash('sha256').update(bytes).digest('hex'),
-        size: bytes.length,
-      },
-    },
-  }
-}
 
 function newHome(): string {
   const home = mkdtempSync(join(tmpdir(), 'dsh-oc-tui-home-'))
@@ -102,126 +31,56 @@ function newHome(): string {
 }
 
 describe('downloadOpenCode', () => {
-  it('downloads, verifies sha256, extracts and caches with mode 0755', async () => {
+  it('installs, caches and returns the binary path', async () => {
     const home = newHome()
-    handler = (_path, response) => {
-      response.writeHead(200)
-      response.end(archive)
+    const install = async (packageName: string, version: string, targetDir: string) => {
+      const bin = join(targetDir, 'node_modules', packageName, 'bin', 'opencode')
+      mkdirSync(join(targetDir, 'node_modules', packageName, 'bin'), { recursive: true })
+      writeFileSync(bin, '#!/bin/sh\nprintf "opencode 2.1.0\\n"\n')
+      chmodSync(bin, 0o755)
+      return true
     }
 
     const target = await downloadOpenCode({
       env: { DSH_HOME: home },
-      version: '1.18.18',
+      version: '2.1.0',
       platform: linuxPlatform,
-      manifest: manifestFor('/asset.tar.gz'),
-      fetchImpl: fetch,
+      installNpmPackage: install,
     })
 
-    expect(target).toBe(join(home, 'opencode', 'bin', '1.18.18', 'opencode'))
+    expect(target).toBe(join(home, 'opencode', 'bin', '2.1.0', 'opencode'))
     expect(existsSync(target)).toBe(true)
     expect(statSync(target).mode & 0o777).toBe(0o755)
   })
 
-  it('retries once after a sha256 failure and then reports the failure', async () => {
+  it('uses a preinstalled cache when present', async () => {
     const home = newHome()
-    handler = (_path, response) => {
-      response.writeHead(200)
-      response.end('not-the-archive')
-    }
+    const target = join(home, 'opencode', 'bin', '2.1.0', 'opencode')
+    mkdirSync(join(home, 'opencode', 'bin', '2.1.0'), { recursive: true })
+    writeFileSync(target, '#!/bin/sh\nprintf "opencode 2.1.0\\n"\n')
+    chmodSync(target, 0o755)
 
-    await expect(
-      downloadOpenCode({
-        env: { DSH_HOME: home },
-        version: '1.18.18',
-        platform: linuxPlatform,
-        manifest: manifestFor('/bad.tar.gz'),
-        fetchImpl: fetch,
-      }),
-    ).rejects.toThrow(/sha256 mismatch/)
-    expect(requests).toHaveLength(2)
-  })
-
-  it('succeeds when only the first response is corrupt', async () => {
-    const home = newHome()
-    handler = (_path, response) => {
-      response.writeHead(200)
-      response.end(requests.length === 1 ? 'corrupt' : archive)
-    }
-
-    const target = await downloadOpenCode({
+    const install = async () => false
+    const result = await downloadOpenCode({
       env: { DSH_HOME: home },
-      version: '1.18.18',
+      version: '2.1.0',
       platform: linuxPlatform,
-      manifest: manifestFor('/flaky.tar.gz'),
-      fetchImpl: fetch,
+      installNpmPackage: install,
     })
-    expect(existsSync(target)).toBe(true)
-    expect(requests).toHaveLength(2)
+    expect(result).toBe(target)
   })
 
-  it('rewrites GitHub URLs through DSH_OC_OPENCODE_MIRROR', async () => {
+  it('throws and includes recovery suggestions on failure', async () => {
     const home = newHome()
-    handler = (_path, response) => {
-      response.writeHead(200)
-      response.end(archive)
-    }
-    const githubUrl = 'https://github.com/anomalyco/opencode/releases/download/v1.18.18/opencode-linux-x64.tar.gz'
-    const manifest: OpenCodeAssetsManifest = {
-      version: '1.18.18',
-      assets: {
-        'linux-x64': {
-          url: githubUrl,
-          sha256: createHash('sha256').update(archive).digest('hex'),
-          size: archive.length,
-        },
-      },
-    }
-
-    await downloadOpenCode({
-      env: { DSH_HOME: home, DSH_OC_OPENCODE_MIRROR: baseUrl() },
-      version: '1.18.18',
-      platform: linuxPlatform,
-      manifest,
-      fetchImpl: fetch,
-    })
-
-    expect(requests[0]).toBe('/anomalyco/opencode/releases/download/v1.18.18/opencode-linux-x64.tar.gz')
-  })
-
-  it('includes all three recovery suggestions in the error', async () => {
-    const home = newHome()
-    handler = (_path, response) => {
-      response.writeHead(200)
-      response.end('bad')
-    }
-
+    const install = async () => false
     await expect(
       downloadOpenCode({
         env: { DSH_HOME: home },
-        version: '1.18.18',
+        version: '2.1.0',
         platform: linuxPlatform,
-        manifest: manifestFor('/bad.tar.gz'),
-        fetchImpl: fetch,
+        installNpmPackage: install,
       }),
     ).rejects.toThrow(/DSH_OC_OPENCODE_BIN/)
-    await expect(
-      downloadOpenCode({
-        env: { DSH_HOME: home },
-        version: '1.18.18',
-        platform: linuxPlatform,
-        manifest: manifestFor('/bad.tar.gz'),
-        fetchImpl: fetch,
-      }),
-    ).rejects.toThrow(/dsh plugin --profile oc add opencode-ai@1\.18\.18/)
-    await expect(
-      downloadOpenCode({
-        env: { DSH_HOME: home },
-        version: '1.18.18',
-        platform: linuxPlatform,
-        manifest: manifestFor('/bad.tar.gz'),
-        fetchImpl: fetch,
-      }),
-    ).rejects.toThrow(/manually downloading/)
   })
 })
 

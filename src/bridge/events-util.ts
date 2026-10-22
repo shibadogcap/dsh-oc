@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type { SessionEvent } from '@deepseek-ai/dsh-session/types'
-import type { ToolResultBlock } from '@deepseek-ai/dsh-llm/types'
-import type { MessageConvertOptions, V1MessageEntry } from './convert/message.js'
+import type { MessageConvertOptions } from './convert/message.js'
+import type { WireMessageEntry } from './convert/wire.js'
 import { DEFAULT_AGENT, projectIdFor, safeJsonParse } from './convert/common.js'
 import { opencodeToolName, type ToolCallInfo } from './convert/tool.js'
 import type { InteractionState } from './state.js'
@@ -9,7 +9,11 @@ import type { InteractionState } from './state.js'
 /**
  * SSE event emitted to opencode. We deliberately carry the same payload under
  * both `properties` (the 1.18.18 TUI binary's expectation) and `data` (the
- * published `@opencode-ai/sdk@1.18.18` type), so either consumer can parse it.
+ * published OpenCode 2.x payload), so either consumer can parse it.
+ *
+ * The bridge also speaks the OpenCode 2.x native vocabulary (see
+ * `makeV2Event`): `properties` stays the 1.18.18 projection while `data`
+ * carries the 2.x payload of the same event.
  */
 export interface BridgeGlobalEvent {
   directory: string
@@ -17,9 +21,18 @@ export interface BridgeGlobalEvent {
   workspace?: string
   payload: {
     id: string
+    created?: number
     type: string
+    /** The OpenCode 1.18.18 projection; what the bundled TUI reads. */
     properties: Record<string, unknown>
+    /**
+     * The OpenCode 2.x projection; what a 2.x client (the OpenChamber UI)
+     * reads. It is the 1.18.18 payload unless the event has a 2.x-native
+     * counterpart, in which case it carries the 2.x payload.
+     */
     data: Record<string, unknown>
+    durable?: { aggregateID: string; seq: number; version: 1 }
+    location?: { directory: string; workspaceID?: string }
   }
 }
 
@@ -40,6 +53,12 @@ export interface TranslateDeps {
   clearTimeoutImpl?: (handle: TimerHandle | undefined) => void
   /** Called with events flushed asynchronously by the tool-input throttle. */
   onFlush?: (events: BridgeGlobalEvent[]) => void
+  /**
+   * Called with every OpenCode 2.x native event the translator produces.
+   * The 1.18.18 TUI stream keeps its own vocabulary, so the 2.x events
+   * travel on their own channel.
+   */
+  onV2Event?: (event: BridgeGlobalEvent) => void
 }
 
 /** Structural timer handle so tests can inject a fake scheduler. */
@@ -47,20 +66,108 @@ export interface TimerHandle {
   unref?(): unknown
 }
 
+/**
+ * Durable sequence counters, one per aggregate (the session id). OpenCode 2.x
+ * numbers the events of a session, so the sequence has to advance per session
+ * rather than per process.
+ */
+const durableSeqByAggregate = new Map<string, number>()
+
+/** The next durable sequence number of one aggregate. */
+function nextDurableSeq(aggregateID: string): number {
+  const next = (durableSeqByAggregate.get(aggregateID) ?? 0) + 1
+  durableSeqByAggregate.set(aggregateID, next)
+  return next
+}
+
 export function makeEvent(
   directory: string,
   type: string,
   properties: Record<string, unknown>,
   project?: string,
+  v2?: Record<string, unknown>,
 ): BridgeGlobalEvent {
+  const aggregateID = typeof properties.sessionID === 'string' ? properties.sessionID : directory
   return {
     directory,
     ...(project === undefined ? {} : { project }),
     payload: {
       id: randomUUID(),
+      created: Date.now(),
       type,
       properties,
-      data: properties,
+      data: v2 ?? properties,
+      durable: { aggregateID, seq: nextDurableSeq(aggregateID), version: 1 },
+      location: { directory },
+    },
+  }
+}
+
+/**
+ * Build one OpenCode 2.x native event. The 2.x vocabulary names its events
+ * differently (`session.text.delta`, not `message.part.delta`) and carries
+ * the event's own fields under `data`; the 1.18.18 TUI ignores the event
+ * because it does not know the name.
+ */
+export function makeV2Event(
+  directory: string,
+  type: string,
+  data: Record<string, unknown>,
+  project?: string,
+  aggregateID?: string,
+): BridgeGlobalEvent {
+  const aggregate = aggregateID
+    ?? (typeof data.sessionID === 'string' ? data.sessionID : directory)
+  return {
+    directory,
+    ...(project === undefined ? {} : { project }),
+    payload: {
+      id: randomUUID(),
+      created: Date.now(),
+      type,
+      properties: data,
+      data,
+      durable: { aggregateID: aggregate, seq: nextDurableSeq(aggregate), version: 1 },
+      location: { directory },
+    },
+  }
+}
+
+/**
+ * Rewrite every occurrence of a dsh session id in an event payload.
+ *
+ * A revert forks the dsh session at the boundary, so the events of the fork
+ * carry the new dsh id while the clients know the session under its
+ * original id. The ids are unique, so replacing every exact match is safe
+ * and covers the many shapes a session id can take in an event.
+ */
+export function mapEventSessionId(
+  event: BridgeGlobalEvent,
+  from: string,
+  to: string,
+): BridgeGlobalEvent {
+  if (from === to) return event
+  const replace = (value: unknown): unknown => {
+    if (typeof value === 'string') return value === from ? to : value
+    if (Array.isArray(value)) return value.map(replace)
+    if (value !== null && typeof value === 'object') {
+      const out: Record<string, unknown> = {}
+      for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+        out[key] = replace(item)
+      }
+      return out
+    }
+    return value
+  }
+  return {
+    ...event,
+    payload: {
+      ...event.payload,
+      properties: replace(event.payload.properties) as Record<string, unknown>,
+      data: replace(event.payload.data) as Record<string, unknown>,
+      ...(event.payload.durable === undefined
+        ? {}
+        : { durable: { ...event.payload.durable, aggregateID: event.payload.durable.aggregateID === from ? to : event.payload.durable.aggregateID } }),
     },
   }
 }
@@ -107,8 +214,8 @@ export function messageEvents(
 }
 
 export function toolCallId(resultEvent: SessionEvent<'tool/result'>): string {
-  const block = resultEvent.data.message.content[0] as ToolResultBlock | undefined
-  return String(block?.toolCallId ?? resultEvent.data.message.source.callId)
+  const message = resultEvent.data.message as { toolCallId?: unknown; source?: { callId?: unknown } }
+  return String(message.toolCallId ?? message.source?.callId ?? '')
 }
 
 /** Best-effort structured progress label for a started tool call. */
@@ -212,7 +319,7 @@ export function commandResultMessage(
     parentID?: string
     model?: { providerID: string; modelID: string; variant?: string }
   } = {},
-): { events: BridgeGlobalEvent[]; entry: V1MessageEntry } {
+): { events: BridgeGlobalEvent[]; entry: WireMessageEntry } {
   const directory = directoryFor(sessionId, deps)
   const project = projectIdFor(directory)
   const events: BridgeGlobalEvent[] = []
@@ -273,8 +380,8 @@ export function commandResultMessage(
   return {
     events,
     entry: {
-      info: info as unknown as V1MessageEntry['info'],
-      parts: [part as unknown as V1MessageEntry['parts'][number]],
+      info: info as unknown as WireMessageEntry['info'],
+      parts: [part as unknown as WireMessageEntry['parts'][number]],
     },
   }
 }

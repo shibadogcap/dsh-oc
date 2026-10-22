@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import type { BridgeFrame, ToolEventView } from './dsh-types.js'
 import type { BridgeEvent } from './dsh-types.js'
-import type { StreamChunk, ToolResultBlock } from '@deepseek-ai/dsh-llm/types'
-import type { SnapshotFileDiff } from '@opencode-ai/sdk/v2/types'
+import type { StreamChunk } from '@deepseek-ai/dsh-llm/types'
+import type { FileDiffInfo } from '@opencode/client'
 import {
   assistantMessageFromEvent,
   isAutoCompactCheckpoint,
@@ -13,14 +13,15 @@ import {
 import {
   DEFAULT_AGENT,
   externalProviderId,
+  OPENCODE_VERSION,
   projectIdFor,
   provisionalMessageId,
   provisionalPartId,
   stableId,
   textFromBlocks,
 } from './convert/common.js'
-import { toPermissionRequest } from './convert/permission.js'
-import { toQuestionRequest } from './convert/question.js'
+import { toPermissionRequest, toPermissionV2 } from './convert/permission.js'
+import { toFormAnswer, toFormInfo, toQuestionRequest } from './convert/question.js'
 import {
   completedToolPart,
   errorToolPart,
@@ -54,6 +55,7 @@ import {
   directoryFor,
   earliestBlockStart,
   makeEvent,
+  makeV2Event,
   messageEvents,
   messageOptions,
   opencodeError,
@@ -71,11 +73,67 @@ function minimumAssistantCreatedAt(userTime: number | undefined): number {
   return userTime === undefined ? Number.MIN_SAFE_INTEGER : userTime + 1
 }
 
+/** Map a dsh finish reason onto the OpenCode 2.x finish vocabulary. */
+function v2FinishReason(
+  reason: string | undefined,
+): 'stop' | 'length' | 'tool-calls' | 'content-filter' | 'error' | 'unknown' {
+  switch (reason) {
+    case 'stop':
+      return 'stop'
+    case 'tool-calls':
+      return 'tool-calls'
+    case 'max-tokens':
+      return 'length'
+    case 'error':
+      return 'error'
+    default:
+      return 'unknown'
+  }
+}
+
+/** The text of a dsh content block list, as the 2.x inbox item carries it. */
+function inboxItemText(content: readonly unknown[]): string {
+  return content
+    .map((block) => (block as { type?: string; text?: unknown } | null))
+    .filter((block): block is { type?: string; text: string } =>
+      block?.type === 'text' && typeof block.text === 'string')
+    .map((block) => block.text)
+    .join('')
+}
+
+/** The OpenCode 2.x model reference of a dsh model selection. */function v2ModelRef(model: { providerID: string; modelID: string; variant?: string }): {
+  id: string
+  providerID: string
+  variant?: string
+} {
+  return {
+    id: model.modelID,
+    providerID: model.providerID,
+    ...(model.variant === undefined ? {} : { variant: model.variant }),
+  }
+}
+
+/** Map a dsh cancellation cause onto the OpenCode 2.x interrupt reason. */function v2InterruptReason(
+  cause: unknown,
+): 'user' | 'shutdown' | 'superseded' | 'inactivity' {
+  const kind = (cause as { kind?: unknown } | undefined)?.kind
+  switch (kind) {
+    case 'parent':
+      return 'superseded'
+    case 'disposed':
+      return 'shutdown'
+    default:
+      return 'user'
+  }
+}
+
 export {
   agentErrorEvents,
   commandResultEvents,
   commandResultMessage,
   makeEvent,
+  makeV2Event,
+  mapEventSessionId,
   opencodeError,
   toolCallId,
   toolProgressStructured,
@@ -135,6 +193,12 @@ interface StreamBlockState {
   start: number
   text: string
   sent: number
+  /**
+   * Position of this block inside its assistant message, counted per kind
+   * (text blocks 0,1,2..., reasoning blocks 0,1,2...). The OpenCode 2.x
+   * vocabulary addresses text and reasoning parts by that ordinal.
+   */
+  ordinal: number
 }
 
 /**
@@ -242,6 +306,31 @@ interface SessionStreamState {
   completedMessageIds: Set<string>
   compactions: Map<string, CompactionStreamState>
   toolInputs: Map<string, ToolInputState>
+  /**
+   * Next ordinal per `${turn}:${step}:${blockType}`. The 2.x vocabulary counts
+   * text and reasoning blocks separately inside one assistant message.
+   */
+  ordinalCounters: Map<string, number>
+  /**
+   * The 2.x blocks already announced for a step, keyed by
+   * `${turn}:${step}:${blockType}:${ordinal}`.
+   */
+  v2Blocks: Map<string, V2BlockMeta>
+  /**
+   * The 2.x tool input phase of every call id. The 1.18.18 stream repeats
+   * the tool input events when a call arrives both as a `tool/call` and as a
+   * `tool/result`; the 2.x vocabulary publishes them once per call.
+   */
+  v2ToolPhases: Map<string, 'started' | 'called'>
+  /** Blocks whose 2.x `*.ended` event was already published. */
+  endedBlocks: Set<string>
+}
+
+/** One text or reasoning block in the 2.x vocabulary. */
+interface V2BlockMeta {
+  blockType: 'text' | 'reasoning'
+  ordinal: number
+  messageId: string
 }
 
 /**
@@ -303,6 +392,10 @@ export class MuxEventTranslator {
         completedMessageIds: new Set(),
         compactions: new Map(),
         toolInputs: new Map(),
+        ordinalCounters: new Map(),
+        v2Blocks: new Map(),
+        v2ToolPhases: new Map(),
+        endedBlocks: new Set(),
       }
       this.streams.set(sessionId, state)
     }
@@ -382,6 +475,305 @@ export class MuxEventTranslator {
 
   private toolKey(turn: number, step: number, index: number): string {
     return `${turn}:${step}:${index}`
+  }
+
+  /**
+   * Publish one OpenCode 2.x native event. The 2.x vocabulary is a channel of
+   * its own: the 1.18.18 TUI stream keeps its event names and shapes, and the
+   * 2.x clients read the flat envelope of the same stream.
+   */
+  private v2Event(
+    directory: string,
+    project: string | undefined,
+    type: string,
+    data: Record<string, unknown>,
+    aggregateID?: string,
+  ): void {
+    this.deps.onV2Event?.(makeV2Event(directory, type, data, project, aggregateID))
+  }
+
+  /** The OpenCode 2.x model reference of a session. */
+  private v2Model(sessionId: string): { id: string; providerID: string; variant?: string } {
+    const selected = this.deps.state.sessionModelSelectionFor(sessionId)
+      ?? this.deps.defaultModel
+      ?? { providerID: 'deepseek', modelID: 'deepseek-chat' }
+    return v2ModelRef(selected)
+  }
+
+  /** The OpenCode 2.x agent id of a session. */
+  private v2Agent(sessionId: string): string {
+    return this.deps.state.sessionAgentFor(sessionId) ?? DEFAULT_AGENT
+  }
+
+  /**
+   * The next ordinal of a block kind inside one assistant message. The 2.x
+   * vocabulary counts text and reasoning blocks separately, in the order they
+   * appear, so the counter is kept per `${turn}:${step}:${blockType}`.
+   */
+  private nextOrdinal(
+    state: SessionStreamState,
+    stepKey: string,
+    blockType: 'text' | 'reasoning',
+  ): number {
+    const key = `${stepKey}:${blockType}`
+    const ordinal = state.ordinalCounters.get(key) ?? 0
+    state.ordinalCounters.set(key, ordinal + 1)
+    return ordinal
+  }
+
+  /**
+   * Close one streamed block for the 2.x vocabulary (`session.text.ended` /
+   * `session.reasoning.ended`). A block is closed once, even when the final
+   * assistant message and the turn end both reach for it.
+   */
+  private endV2Block(
+    state: SessionStreamState,
+    sessionId: string,
+    directory: string,
+    project: string,
+    blockKey: string,
+    meta: V2BlockMeta,
+    text: string,
+  ): void {
+    if (state.endedBlocks.has(blockKey)) return
+    state.endedBlocks.add(blockKey)
+    this.v2Event(
+      directory,
+      project,
+      meta.blockType === 'text' ? 'session.text.ended' : 'session.reasoning.ended',
+      {
+        sessionID: sessionId,
+        assistantMessageID: meta.messageId,
+        ordinal: meta.ordinal,
+        text,
+      },
+    )
+  }
+
+  /**
+   * Publish the 2.x `session.created` event of a session the bridge learned
+   * about. The 2.x client needs the record before any other event of the
+   * session can be routed to it.
+   */
+  private v2SessionCreated(
+    sessionId: string,
+    directory: string,
+    title: string,
+    project: string | undefined,
+  ): void {
+    const parentID = this.deps.state.sessionParents.get(sessionId)
+    this.v2Event(directory, project, 'session.created', {
+      sessionID: sessionId,
+      projectID: projectIdFor(directory),
+      location: { directory },
+      slug: sessionId,
+      title,
+      ...(parentID === undefined ? {} : { parentID }),
+      ...(this.deps.state.sessionAgentFor(sessionId) === undefined
+        ? {}
+        : { agent: this.deps.state.sessionAgentFor(sessionId) }),
+      model: this.v2Model(sessionId),
+      version: OPENCODE_VERSION,
+    }, sessionId)
+  }
+
+  /**
+   * Publish the 2.x `session.tool.input.started` of a call, once per call
+   * id: the 1.18.18 stream repeats the tool input events when a call
+   * arrives both as a `tool/call` and as a `tool/result`.
+   */
+  private v2ToolInputStarted(
+    sessionId: string,
+    directory: string,
+    project: string,
+    callId: string,
+    messageID: string,
+    name: string,
+  ): void {
+    const state = this.streamState(sessionId)
+    if (state.v2ToolPhases.has(callId)) return
+    state.v2ToolPhases.set(callId, 'started')
+    this.v2Event(directory, project, 'session.tool.input.started', {
+      sessionID: sessionId,
+      assistantMessageID: messageID,
+      id: callId,
+      name,
+    })
+  }
+
+  /**
+   * Publish the 2.x `session.tool.input.ended` / `session.tool.called` /
+   * `session.tool.progress` of a call, once per call id.
+   */
+  private v2ToolCalled(
+    sessionId: string,
+    directory: string,
+    project: string,
+    callId: string,
+    messageID: string,
+    name: string,
+    input: Record<string, unknown>,
+    text: string,
+    metadata: Record<string, unknown>,
+  ): void {
+    const state = this.streamState(sessionId)
+    if (state.v2ToolPhases.get(callId) === 'called') return
+    state.v2ToolPhases.set(callId, 'called')
+    this.v2Event(directory, project, 'session.tool.input.ended', {
+      sessionID: sessionId,
+      assistantMessageID: messageID,
+      id: callId,
+      text,
+    })
+    this.v2Event(directory, project, 'session.tool.called', {
+      sessionID: sessionId,
+      assistantMessageID: messageID,
+      id: callId,
+      name,
+      input,
+      executed: false,
+    })
+    this.v2Event(directory, project, 'session.tool.progress', {
+      sessionID: sessionId,
+      assistantMessageID: messageID,
+      id: callId,
+      metadata,
+    })
+  }
+
+  /**
+   * Publish the 2.x execution outcome of a finished turn: the turn either
+   * succeeded, failed, or was interrupted.
+   */
+  private v2ExecutionEnded(
+    sessionId: string,
+    event: BridgeEvent,
+    directory: string,
+    project: string,
+  ): void {
+    const reason = (event.data as {
+      reason?: { kind?: unknown; error?: { message?: unknown; code?: unknown }; reason?: { kind?: unknown } }
+    }).reason
+    const kind = typeof reason?.kind === 'string' ? reason.kind : 'completed'
+    if (kind === 'error') {
+      this.v2Event(directory, project, 'session.execution.failed', {
+        sessionID: sessionId,
+        error: {
+          type: typeof reason?.error?.code === 'string' ? reason.error.code : 'turn-failed',
+          message: typeof reason?.error?.message === 'string' ? reason.error.message : 'the turn failed',
+        },
+      })
+      return
+    }
+    if (kind === 'aborted' || kind === 'blocked') {
+      this.v2Event(directory, project, 'session.execution.interrupted', {
+        sessionID: sessionId,
+        reason: v2InterruptReason(reason?.reason),
+      })
+      return
+    }
+    this.v2Event(directory, project, 'session.execution.succeeded', { sessionID: sessionId })
+  }
+
+  /**
+   * Publish the 2.x events of one tool result: the call either succeeded or
+   * failed, with the output the 1.18.18 card shows.
+   */
+  private v2ToolResult(
+    sessionId: string,
+    messageID: string,
+    callId: string,
+    call: ToolCallInfo,
+    output: string,
+    metadata: Record<string, unknown> | undefined,
+    error: { name: string; code: string } | undefined,
+    directory: string,
+    project: string,
+  ): void {
+    const name = opencodeToolName(call.name, safeJsonParse(call.arguments))
+    if (error === undefined) {
+      this.v2Event(directory, project, 'session.tool.success', {
+        sessionID: sessionId,
+        assistantMessageID: messageID,
+        id: callId,
+        name,
+        content: [{ type: 'text', text: output }],
+        output,
+        ...(metadata === undefined ? {} : { metadata }),
+        executed: true,
+      })
+      return
+    }
+    this.v2Event(directory, project, 'session.tool.failed', {
+      sessionID: sessionId,
+      assistantMessageID: messageID,
+      id: callId,
+      name,
+      error: { type: error.code, message: error.name },
+      ...(metadata === undefined ? {} : { metadata }),
+      executed: true,
+    })
+  }
+
+  /**
+   * Publish the 2.x block events of a finished assistant message: every text
+   * and reasoning block is closed with its final text, and the blocks the
+   * live stream never carried (a cold read) are opened and closed at once.
+   */
+  private v2FinalBlocks(
+    state: SessionStreamState,
+    sessionId: string,
+    messageID: string,
+    stepKey: string,
+    content: readonly { type: string; text?: unknown }[],
+    directory: string,
+    project: string,
+  ): void {
+    const texts: string[] = []
+    const reasonings: string[] = []
+    for (const block of content) {
+      if (block.type === 'text') texts.push(typeof block.text === 'string' ? block.text : '')
+      else if (block.type === 'reasoning') reasonings.push(typeof block.text === 'string' ? block.text : '')
+    }
+    for (const [key, meta] of [...state.v2Blocks]) {
+      if (!key.startsWith(`${stepKey}:`)) continue
+      const finalText = meta.blockType === 'text'
+        ? (texts[meta.ordinal] ?? '')
+        : (reasonings[meta.ordinal] ?? '')
+      this.endV2Block(state, sessionId, directory, project, key, meta, finalText)
+    }
+    // A block the live stream never carried (a cold read) is opened and closed
+    // here, so the 2.x client sees the same parts the history carries.
+    for (const [ordinal, text] of texts.entries()) {
+      const key = `${stepKey}:text:${ordinal}`
+      if (state.v2Blocks.has(key)) continue
+      this.v2Event(directory, project, 'session.text.started', {
+        sessionID: sessionId,
+        assistantMessageID: messageID,
+        ordinal,
+      })
+      this.v2Event(directory, project, 'session.text.ended', {
+        sessionID: sessionId,
+        assistantMessageID: messageID,
+        ordinal,
+        text,
+      })
+    }
+    for (const [ordinal, text] of reasonings.entries()) {
+      const key = `${stepKey}:reasoning:${ordinal}`
+      if (state.v2Blocks.has(key)) continue
+      this.v2Event(directory, project, 'session.reasoning.started', {
+        sessionID: sessionId,
+        assistantMessageID: messageID,
+        ordinal,
+      })
+      this.v2Event(directory, project, 'session.reasoning.ended', {
+        sessionID: sessionId,
+        assistantMessageID: messageID,
+        ordinal,
+        text,
+      })
+    }
   }
 
   private assistantMessageId(sessionId: string, turn: number, step: number): string {
@@ -551,6 +943,14 @@ export class MuxEventTranslator {
     this.deps.state.setAssistantMessageCreatedAt(sessionId, messageID, createdAt)
     this.deps.state.markAssistantPending(sessionId, messageID)
     if (bridgeId !== undefined) state.openedMessageIds.add(bridgeId)
+    // The 2.x vocabulary opens a step with the assistant message it belongs
+    // to; every later text/reasoning/tool event of the step names it.
+    this.v2Event(directory, project, 'session.step.started', {
+      sessionID: sessionId,
+      assistantMessageID: messageID,
+      agent: this.v2Agent(sessionId),
+      model: this.v2Model(sessionId),
+    })
     return {
       messageID,
       events: alreadyOpen
@@ -600,6 +1000,14 @@ export class MuxEventTranslator {
       ended: false,
     }
     this.streamState(sessionId).toolInputs.set(key, state)
+    this.v2ToolInputStarted(
+      sessionId,
+      directory,
+      project,
+      callId,
+      messageID,
+      opencodeToolName(state.name, safeJsonParse(state.text)),
+    )
     const events: BridgeGlobalEvent[] = [
       ...provisional.events,
       makeEvent(directory, 'session.next.tool.input.started', {
@@ -684,6 +1092,12 @@ export class MuxEventTranslator {
     if (state.ended || state.pendingDelta.length === 0) return []
     const delta = state.pendingDelta
     state.pendingDelta = ''
+    this.v2Event(directory, project, 'session.tool.input.delta', {
+      sessionID: sessionId,
+      assistantMessageID: state.messageID,
+      id: state.callId,
+      delta,
+    })
     return [
       makeEvent(directory, 'session.next.tool.input.delta', {
         timestamp: state.lastTime,
@@ -718,6 +1132,17 @@ export class MuxEventTranslator {
     if (state.ended) return events
     state.ended = true
     const input = safeJsonParse(state.text)
+    this.v2ToolCalled(
+      sessionId,
+      directory,
+      project,
+      state.callId,
+      state.messageID,
+      opencodeToolName(state.name, input),
+      input,
+      state.text,
+      { title: opencodeToolName(state.name, input) },
+    )
     events.push(
       makeEvent(directory, 'session.next.tool.input.ended', {
         timestamp: time,
@@ -757,6 +1182,19 @@ export class MuxEventTranslator {
     time: number,
   ): BridgeGlobalEvent[] {
     const input = safeJsonParse(call.arguments)
+    const name = opencodeToolName(call.name, input)
+    this.v2ToolInputStarted(sessionId, directory, project, call.callId, messageID, name)
+    this.v2ToolCalled(
+      sessionId,
+      directory,
+      project,
+      call.callId,
+      messageID,
+      name,
+      input,
+      call.arguments,
+      toolProgressStructured(call),
+    )
     return [
       makeEvent(directory, 'session.next.tool.input.started', {
         timestamp: time,
@@ -831,6 +1269,12 @@ export class MuxEventTranslator {
       case 'compaction/start': {
         const messageID = `checkpoint:${key}`
         state.compactions.set(key, { messageID, text: '', reason, ended: false })
+        this.v2Event(directory, project, 'session.compaction.started', {
+          sessionID: sessionId,
+          reason,
+          recent: '',
+          inputID: messageID,
+        })
         return [
           makeEvent(directory, 'session.next.compaction.started', {
             timestamp: event.time,
@@ -843,7 +1287,16 @@ export class MuxEventTranslator {
       case 'compaction/summary': {
         const pending = state.compactions.get(key)
         if (!pending) return []
+        const previous = pending.text
         pending.text = textFromBlocks(event.data.summary ?? [])
+        // The 2.x delta is an increment: the client appends it to the summary
+        // it is already showing.
+        this.v2Event(directory, project, 'session.compaction.delta', {
+          sessionID: sessionId,
+          text: pending.text.startsWith(previous)
+            ? pending.text.slice(previous.length)
+            : pending.text,
+        })
         return [
           makeEvent(directory, 'session.next.compaction.delta', {
             timestamp: event.time,
@@ -862,6 +1315,13 @@ export class MuxEventTranslator {
           || (typeof event.data.error === 'string' && event.data.error
             ? `Compaction failed: ${event.data.error}`
             : '')
+        this.v2Event(directory, project, 'session.compaction.ended', {
+          sessionID: sessionId,
+          reason: pending.reason,
+          text,
+          recent: '',
+          model: this.v2Model(sessionId),
+        })
         return [
           makeEvent(directory, 'session.next.compaction.ended', {
             timestamp: event.time,
@@ -976,12 +1436,17 @@ export class MuxEventTranslator {
           ...entry,
         })
         const directory = directoryFor(registered.sessionId, this.deps)
+        const project = projectIdFor(directory)
+        // The 1.18.18 TUI reads the `permission`/`patterns` projection, the
+        // 2.x client reads the `action`/`resources` one; both live in the
+        // same event.
         return [
           makeEvent(
             directory,
             'permission.asked',
             toPermissionRequest(registered) as unknown as Record<string, unknown>,
-            projectIdFor(directory),
+            project,
+            toPermissionV2(registered) as unknown as Record<string, unknown>,
           ),
         ]
       }
@@ -1022,12 +1487,17 @@ export class MuxEventTranslator {
           ...entry,
         })
         const directory = directoryFor(registered.sessionId, this.deps)
+        const project = projectIdFor(directory)
+        this.v2Event(directory, project, 'form.created', {
+          form: toFormInfo(registered),
+          sessionID: registered.sessionId,
+        }, registered.sessionId)
         return [
           makeEvent(
             directory,
             'question.asked',
             toQuestionRequest(registered) as unknown as Record<string, unknown>,
-            projectIdFor(directory),
+            project,
           ),
         ]
       }
@@ -1051,6 +1521,12 @@ export class MuxEventTranslator {
             : undefined)
         }
         if (frame.outcome === 'answered') {
+          this.v2Event(directory, project, 'form.replied', {
+            id: entry.opencodeId,
+            formID: entry.opencodeId,
+            sessionID: entry.sessionId,
+            answer: toFormAnswer(entry, frame.answers),
+          }, entry.sessionId)
           return [
             makeEvent(directory, 'question.replied', {
               sessionID: entry.sessionId,
@@ -1059,6 +1535,11 @@ export class MuxEventTranslator {
             }, project),
           ]
         }
+        this.v2Event(directory, project, 'form.cancelled', {
+          id: entry.opencodeId,
+          formID: entry.opencodeId,
+          sessionID: entry.sessionId,
+        }, entry.sessionId)
         return [
           makeEvent(directory, 'question.rejected', {
             sessionID: entry.sessionId,
@@ -1149,6 +1630,7 @@ export class MuxEventTranslator {
     if (key === 'title') {
       const title = typeof value === 'string' ? value : ''
       this.deps.state.setSessionTitle(sessionId, title)
+      this.v2Event(directory, project, 'session.renamed', { sessionID: sessionId, title })
       return [
         makeEvent(
           directory,
@@ -1170,7 +1652,13 @@ export class MuxEventTranslator {
     }
     if (key === 'agentPreset') {
       if (typeof value !== 'string' || value.length === 0) return []
+      const previous = this.deps.state.sessionAgentFor(sessionId)
       this.deps.state.setSessionAgent(sessionId, value)
+      this.v2Event(directory, project, 'session.agent.selected', {
+        sessionID: sessionId,
+        agent: value,
+        ...(previous === undefined ? {} : { previous }),
+      })
       return [makeEvent(directory, 'session.updated', {
         sessionID: sessionId,
         info: minimalSession(sessionId, {
@@ -1212,10 +1700,16 @@ export class MuxEventTranslator {
       const current = selection?.next ?? selection?.lastUsed
       if (current !== null && current !== undefined
         && typeof current.provider === 'string' && typeof current.model === 'string') {
+        const previous = this.deps.state.sessionModelSelectionFor(sessionId)
         this.deps.state.setSessionModelSelection(sessionId, {
           providerID: externalProviderId(current.provider),
           modelID: current.model,
           ...(typeof current.reasoningEffort === 'string' ? { variant: current.reasoningEffort } : {}),
+        })
+        this.v2Event(directory, project, 'session.model.selected', {
+          sessionID: sessionId,
+          model: this.v2Model(sessionId),
+          ...(previous === undefined ? {} : { previous: v2ModelRef(previous) }),
         })
       }
       return []
@@ -1272,6 +1766,14 @@ export class MuxEventTranslator {
         const surfaceId = isUserPrompt
           ? this.deps.state.takePromptMessageId(sessionId, dshId)
           : dshId
+        if (isUserPrompt) {
+          // The 2.x vocabulary hands the pending user message to the model
+          // when it enters the session, so the inbox item is delivered.
+          this.v2Event(directory, project, 'session.inbox.delivered', {
+            sessionID: sessionId,
+            inboxID: surfaceId,
+          })
+        }
         if (isUserPrompt && surfaceId !== dshId) {
           // The prompt route already echoed this user message (with the
           // bridge-generated id) so the TUI could render its queued card
@@ -1411,6 +1913,8 @@ export class MuxEventTranslator {
           minimumAssistantCreatedAt(state.lastUserMessageCreatedAt),
         )
         this.deps.state.setAssistantMessageCreatedAt(sessionId, messageID, created)
+        let stepCost: number | undefined
+        let stepTokens: Record<string, unknown> | undefined
         const events = messageEvents(sessionId, this.deps, () => {
           const entry = assistantMessageFromEvent(
             event,
@@ -1433,6 +1937,8 @@ export class MuxEventTranslator {
             // Tab-switched first reply still read "Build").
             mode: this.deps.state.sessionAgentFor(sessionId) ?? DEFAULT_AGENT,
           } as unknown as Record<string, unknown>
+          stepCost = typeof info.cost === 'number' ? info.cost : undefined
+          stepTokens = (info.tokens ?? undefined) as Record<string, unknown> | undefined
           if (event.data.message.content.some((block) => block.type === 'tool-call')) {
             // The message is not complete until its tool calls finish; leaving
             // `time.completed` unset keeps later user prompts marked QUEUED.
@@ -1480,6 +1986,33 @@ export class MuxEventTranslator {
         }
         if (streamed) state.provisionalMessageIds.delete(stepKey)
         this.currentAssistant.set(sessionId, messageID)
+        // The 2.x vocabulary: a step that never streamed (a cold read) still
+        // opens its assistant message, then closes every block it carries and
+        // ends the step.
+        if (!streamed) {
+          this.v2Event(directory, project, 'session.step.started', {
+            sessionID: sessionId,
+            assistantMessageID: messageID,
+            agent: this.v2Agent(sessionId),
+            model: this.v2Model(sessionId),
+          })
+        }
+        this.v2FinalBlocks(
+          state,
+          sessionId,
+          messageID,
+          stepKey,
+          event.data.message.content as unknown as ReadonlyArray<{ type: string; text?: unknown }>,
+          directory,
+          project,
+        )
+        this.v2Event(directory, project, 'session.step.ended', {
+          sessionID: sessionId,
+          assistantMessageID: messageID,
+          finish: v2FinishReason(state.finishReasons.get(stepKey) ?? 'stop'),
+          ...(stepCost === undefined ? {} : { cost: stepCost }),
+          ...(stepTokens === undefined ? {} : { tokens: stepTokens }),
+        })
         let calls = this.pendingCalls.get(sessionId)
         if (!calls) {
           calls = new Map<string, ToolCallInfo>()
@@ -1524,6 +2057,7 @@ export class MuxEventTranslator {
           const provisional = hasPromptAssistant
             ? this.ensureProvisionalMessage(sessionId, event.data.turn, 1, event.time, directory, project)
             : { events: [] as BridgeGlobalEvent[] }
+          this.v2Event(directory, project, 'session.execution.started', { sessionID: sessionId })
           const status = this.deps.state.shouldBroadcastSessionStatus(sessionId, true)
           return [
           ...(status ? [makeEvent(directory, 'session.status', { sessionID: sessionId, status: { type: 'busy' } }, project)] : []),
@@ -1539,6 +2073,7 @@ export class MuxEventTranslator {
           makeEvent(directory, 'session.idle', { sessionID: sessionId }, project),
           makeEvent(directory, 'turn.idle', { sessionID: sessionId }, project),
         ]
+        this.v2ExecutionEnded(sessionId, event, directory, project)
         // On interrupt the final assistant/message may never arrive; close any
         // still-open reasoning blocks so the TUI's thinking indicator stops.
         for (const [key, candidate] of [...state.blocks]) {
@@ -1550,6 +2085,11 @@ export class MuxEventTranslator {
                 time: event.time,
               }, project),
             )
+            this.endV2Block(state, sessionId, directory, project, key, {
+              blockType: candidate.blockType,
+              ordinal: candidate.ordinal,
+              messageId: candidate.messageId,
+            }, candidate.text)
             state.blocks.delete(key)
           }
         }
@@ -1604,6 +2144,13 @@ export class MuxEventTranslator {
               },
             }, project),
           )
+          // The 2.x client closes the step the same way: an interrupted step
+          // fails, so its assistant message does not stay open.
+          this.v2Event(directory, project, 'session.step.failed', {
+            sessionID: sessionId,
+            assistantMessageID: messageID,
+            error: { type: 'turn-ended', message: 'the turn ended before the reply completed' },
+          })
           this.deps.state.markAssistantCompleted(sessionId, messageID)
         }
         state.provisionalMessageIds.clear()
@@ -1632,10 +2179,16 @@ export class MuxEventTranslator {
       case 'model/selection': {
         const data = event.data as { provider?: unknown; model?: unknown; reasoningEffort?: unknown }
         if (typeof data.provider === 'string' && typeof data.model === 'string') {
+          const previous = this.deps.state.sessionModelSelectionFor(sessionId)
           this.deps.state.setSessionModelSelection(sessionId, {
             providerID: externalProviderId(data.provider),
             modelID: data.model,
             ...(typeof data.reasoningEffort === 'string' ? { variant: data.reasoningEffort } : {}),
+          })
+          this.v2Event(directory, project, 'session.model.selected', {
+            sessionID: sessionId,
+            model: this.v2Model(sessionId),
+            ...(previous === undefined ? {} : { previous: v2ModelRef(previous) }),
           })
         }
         return []
@@ -1679,7 +2232,13 @@ export class MuxEventTranslator {
           // later prompts carrying the same agent are recognized as already
           // effective (out-of-band plugin switches) instead of re-selecting
           // and tripping the agent-preset-locked warning.
+          const previous = this.deps.state.sessionAgentFor(sessionId)
           this.deps.state.setSessionAgent(sessionId, preset)
+          this.v2Event(directory, project, 'session.agent.selected', {
+            sessionID: sessionId,
+            agent: preset,
+            ...(previous === undefined ? {} : { previous }),
+          })
         }
         return []
       }
@@ -1816,6 +2375,17 @@ export class MuxEventTranslator {
           }, project),
         ]
         const output = toolResultText(resultInfo)
+        this.v2ToolResult(
+          sessionId,
+          messageID,
+          callId,
+          effectiveCall,
+          output,
+          toolResultStructured(resultInfo),
+          resultError,
+          directory,
+          project,
+        )
         const tail = resultError === undefined
           ? [makeEvent(directory, 'session.next.tool.success', {
               timestamp: event.time,
@@ -1855,6 +2425,7 @@ export class MuxEventTranslator {
           const header = (data ?? flat) as { createdAt?: number; cwd?: string; title?: string }
           const childDirectory = header.cwd ?? this.deps.state.sessionDirectories.get(sessionId) ?? directory
           const parentID = this.deps.state.sessionParents.get(sessionId)
+          this.v2SessionCreated(sessionId, childDirectory, header.title ?? '', projectIdFor(childDirectory))
           return [
             makeEvent(childDirectory, 'session.updated', {
               sessionID: sessionId,
@@ -1874,6 +2445,7 @@ export class MuxEventTranslator {
         if (type === 'session/created') {
           const parentID = this.deps.state.sessionParents.get(sessionId)
           const flat = event as unknown as { createdAt?: number }
+          this.v2SessionCreated(sessionId, directory, this.deps.state.sessionTitleFor(sessionId) ?? '', project)
           return [
             makeEvent(directory, 'session.updated', {
               sessionID: sessionId,
@@ -1894,6 +2466,7 @@ export class MuxEventTranslator {
             : typeof data.text === 'string' ? data.text
               : ''
           this.deps.state.setSessionTitle(sessionId, title)
+          this.v2Event(directory, project, 'session.renamed', { sessionID: sessionId, title })
           const parentID = this.deps.state.sessionParents.get(sessionId)
           return [
             makeEvent(directory, 'session.updated', {
@@ -1961,6 +2534,17 @@ export class MuxEventTranslator {
         }, project),
       )
       if (localCard) continue
+      // A message that waits in the session inbox is an inbox item for the
+      // 2.x vocabulary; the prompt route enqueues the one it accepted.
+      this.v2Event(directory, project, 'session.inbox.enqueued', {
+        sessionID: sessionId,
+        inboxID: message.id,
+        item: {
+          type: 'user',
+          payload: { text: inboxItemText(message.content) },
+          delivery: 'queue',
+        },
+      }, sessionId)
       message.content.forEach((block, index) => {
         const textBlock = block as { type?: string; text?: unknown }
         if (textBlock.type !== 'text' || typeof textBlock.text !== 'string') return
@@ -2015,6 +2599,11 @@ export class MuxEventTranslator {
                 time: time0,
               }, project),
             )
+            this.endV2Block(state, sessionId, directory, project, key, {
+              blockType: candidate.blockType,
+              ordinal: candidate.ordinal,
+              messageId: candidate.messageId,
+            }, candidate.text)
             state.blocks.delete(key)
           }
         }
@@ -2043,6 +2632,12 @@ export class MuxEventTranslator {
         this.deps.state.setAssistantMessageCreatedAt(sessionId, provisionalId, provisionalCreated)
         this.deps.state.markAssistantPending(sessionId, provisionalId)
         if (bridgeId !== undefined) state.openedMessageIds.add(bridgeId)
+        this.v2Event(directory, project, 'session.step.started', {
+          sessionID: sessionId,
+          assistantMessageID: provisionalId,
+          agent: this.v2Agent(sessionId),
+          model: this.v2Model(sessionId),
+        })
         if (!alreadyOpen) {
           events.push(
             makeEvent(directory, 'message.updated', {
@@ -2058,6 +2653,7 @@ export class MuxEventTranslator {
           )
         }
       }
+      const ordinal = this.nextOrdinal(state, `${event.data.turn}:${event.data.step}`, blockType)
       block = {
         blockType,
         partId: provisionalPartId(sessionId, event.data.turn, event.data.step, blockType, event.data.index),
@@ -2065,9 +2661,25 @@ export class MuxEventTranslator {
         start: state.blockStarts.get(blockStartKey) ?? time0,
         text: '',
         sent: 0,
+        ordinal,
       }
       state.blocks.set(blockKey, block)
       state.blockPartIds.set(blockStartKey, block.partId)
+      state.v2Blocks.set(`${event.data.turn}:${event.data.step}:${blockType}:${ordinal}`, {
+        blockType,
+        ordinal,
+        messageId: block.messageId,
+      })
+      this.v2Event(
+        directory,
+        project,
+        blockType === 'text' ? 'session.text.started' : 'session.reasoning.started',
+        {
+          sessionID: sessionId,
+          assistantMessageID: block.messageId,
+          ordinal,
+        },
+      )
     }
     const sent = block.sent
     block.text += event.data.texts.join('')
@@ -2083,15 +2695,27 @@ export class MuxEventTranslator {
       )
     }
     if (block.sent > sent) {
+      const delta = block.text.slice(sent)
       events.push(
         makeEvent(directory, 'message.part.delta', {
           sessionID: sessionId,
           messageID: block.messageId,
           partID: block.partId,
           field: 'text',
-          delta: block.text.slice(sent),
+          delta,
           time: time0,
         }, project),
+      )
+      this.v2Event(
+        directory,
+        project,
+        blockType === 'text' ? 'session.text.delta' : 'session.reasoning.delta',
+        {
+          sessionID: sessionId,
+          assistantMessageID: block.messageId,
+          ordinal: block.ordinal,
+          delta,
+        },
       )
     }
     return events
@@ -2125,10 +2749,10 @@ export class MuxEventTranslator {
   }
 }
 
-/** Best-effort conversion of a produced-files projection to SnapshotFileDiff[]. */
-export function convertProducedFiles(value: unknown): SnapshotFileDiff[] {
+/** Best-effort conversion of a produced-files projection to FileDiffInfo[]. */
+export function convertProducedFiles(value: unknown): FileDiffInfo[] {
   if (!Array.isArray(value)) return []
-  const result: SnapshotFileDiff[] = []
+  const result: FileDiffInfo[] = []
   for (const raw of value) {
     if (raw === null || typeof raw !== 'object') continue
     const item = raw as Record<string, unknown>
@@ -2139,24 +2763,24 @@ export function convertProducedFiles(value: unknown): SnapshotFileDiff[] {
       ? item.status
       : file === undefined ? undefined : 'modified'
     result.push({
-      ...(file === undefined ? {} : { file }),
-      ...(typeof item.patch === 'string' ? { patch: item.patch } : {}),
+      file: file ?? '',
+      patch: typeof item.patch === 'string' ? item.patch : '',
       additions,
       deletions,
-      ...(status === undefined ? {} : { status }),
+      status: status ?? 'modified',
     })
   }
   return result
 }
 
-/** Convert bridge file changes to the opencode SnapshotFileDiff shape. */
-export function toSnapshotFileDiffs(changes: readonly FileChange[]): SnapshotFileDiff[] {
+/** Convert bridge file changes to the opencode FileDiffInfo shape. */
+export function toFileDiffInfos(changes: readonly FileChange[]): FileDiffInfo[] {
   return changes.map((change) => ({
     file: change.file,
-    ...(change.patch === undefined ? {} : { patch: change.patch }),
+    patch: change.patch ?? '',
     additions: change.additions,
     deletions: change.deletions,
-    ...(change.status === undefined ? {} : { status: change.status }),
+    status: change.status ?? 'modified',
   }))
 }
 
@@ -2197,7 +2821,7 @@ export function fileChangeEvents(
     }, project),
     makeEvent(directory, 'session.diff', {
       sessionID,
-      diff: toSnapshotFileDiffs(trackedChanges),
+      diff: toFileDiffInfos(trackedChanges),
     }, project),
   ]
   if (patch) {

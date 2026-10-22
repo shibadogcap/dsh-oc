@@ -13,19 +13,11 @@ import type {
   QueuedInboxItem,
 } from './dsh-types.js'
 import type { ModelProviderGroup, PromptContentPart } from '@deepseek-ai/dsh-api-session-controller/types'
-import type { ToolResultBlock } from '@deepseek-ai/dsh-llm/types'
 import type {
-  Command as V1Command,
-  FileDiff as V1FileDiff,
-} from '@opencode-ai/sdk/client'
-import type {
-  CommandV2Info,
-  LocationInfo,
-  Session as V2Session,
+  AgentInfo as ClientAgentInfo,
+  CommandInfo as ClientCommandInfo,
   SessionMessagesResponse,
-  SessionStatus,
-} from '@opencode-ai/sdk/v2/types'
-import type { Agent as V2Agent, AgentV2Info } from '@opencode-ai/sdk/v2/types'
+} from '@opencode/client'
 import type { BridgeApi, BridgeCommandExecution } from './rpc.js'
 import type { SessionAddress } from '@deepseek-ai/dsh-api-session-controller'
 import { call, RpcCallError } from './rpc.js'
@@ -45,19 +37,15 @@ import {
   type SessionV2InfoWithMetadata,
 } from './convert/session.js'
 import {
-  convertMessagesV1,
   convertMessagesV2,
-  type V1MessageEntry,
 } from './convert/message.js'
+import type { WireMessageEntry } from './convert/wire.js'
 import {
-  convertToProviderCatalog,
-  convertToV1Providers,
   convertToV2Models,
   convertToV2Providers,
 } from './convert/model.js'
-import { toPermissionRequest, toPermissionV2 } from './convert/permission.js'
-import { answersToDsh, toQuestionRequest, toQuestionV2 } from './convert/question.js'
-import { convertGoalTodos } from './convert/goal.js'
+import { toPermissionV2 } from './convert/permission.js'
+import { answersToDsh, toFormAnswer, toQuestionV2 } from './convert/question.js'
 import {
   completedToolPart,
   errorToolPart,
@@ -68,9 +56,9 @@ import {
   type FileChange,
   type ToolCallInfo,
 } from './convert/tool.js'
-import { agentErrorEvents, commandResultMessage, convertProducedFiles, makeEvent, toSnapshotFileDiffs } from './events.js'
+import { agentErrorEvents, commandResultMessage, convertProducedFiles, makeEvent, makeV2Event, mapEventSessionId, toFileDiffInfos } from './events.js'
 import { filterGitTrackedDiffs } from './git.js'
-import { DEFAULT_AGENT, dshProviderId, externalProviderId, projectIdFor, safeJsonParse } from './convert/common.js'
+import { DEFAULT_AGENT, dshProviderId, externalProviderId, OPENCODE_VERSION, projectIdFor, safeJsonParse } from './convert/common.js'
 import { ocHelp } from '../help.js'
 import {
   InteractionState,
@@ -84,6 +72,7 @@ import { MuxEventTranslator } from './events.js'
 import type { BridgeGlobalEvent, PendingAssistantSnapshot } from './events.js'
 import { stubRoutes } from './stubs.js'
 import { runShellCommand } from './shell.js'
+import { serveWebUiFile } from './web-ui.js'
 
 export { runShellCommand } from './shell.js'
 
@@ -134,6 +123,8 @@ export interface BridgeRouter {
   ctx: BridgeRouteContext
   match(method: string, pathname: string): Route | undefined
   startSse(req: BridgeRequest, res: ServerResponse): void
+  /** Serve the official opencode web UI, when the bridge has it. */
+  serveWebUi?(req: BridgeRequest, res: ServerResponse): boolean
   /** Feed one translated bridge frame to all SSE clients (host-side pump). */
   feed(frame: BridgeFrame): Promise<void>
   /** Feed one host lifecycle frame to all SSE clients. */
@@ -157,6 +148,14 @@ export interface RouterOptions {
   sseRetryBaseMs?: number
   /** Maximum SSE mux re-subscription attempts before giving up. */
   sseRetryMaxAttempts?: number
+  /**
+   * The directory of the official opencode web UI.
+   *
+   * When it holds the extracted assets, the bridge serves the UI from its own
+   * origin, so a browser reaches the API same-origin (no CORS, no cookie)
+   * exactly like the official `opencode serve` setup.
+   */
+  webUiDir?: string
 }
 
 export function json(status: number, body?: unknown): HandlerResult {
@@ -174,11 +173,29 @@ export async function rpc<T = unknown>(
   signal?: AbortSignal,
 ): Promise<T> {
   try {
-    return await call(ctx.api, method, payload, signal) as T
+    return await call(ctx.api, method, resolveSessionPayload(ctx, payload), signal) as T
   } catch (error) {
     if (error instanceof RpcCallError) throw rpcErrorToHttp(error)
     throw internalError(error instanceof Error ? error.message : String(error))
   }
+}
+
+/**
+ * Point a dsh call at the session the opencode id currently maps to.
+ *
+ * A revert forks the dsh session at the boundary, so the opencode session id
+ * keeps its identity while the conversation moves to the fork. Every dsh
+ * call goes through `rpc`, so resolving the id here covers all of them.
+ */
+export function resolveSessionPayload(
+  ctx: BridgeRouteContext,
+  payload: Record<string, unknown>,
+): Record<string, unknown> {
+  const raw = payload.sessionId
+  if (typeof raw !== 'string') return payload
+  const resolved = ctx.state.resolveSessionId(raw)
+  if (resolved === raw) return payload
+  return { ...payload, sessionId: resolved }
 }
 
 export function bodyAsRecord(body: unknown): Record<string, unknown> {
@@ -188,14 +205,28 @@ export function bodyAsRecord(body: unknown): Record<string, unknown> {
   return body as Record<string, unknown>
 }
 
-export function locationInfo(ctx: BridgeRouteContext): LocationInfo {
+/**
+ * The location block the 2.1.0 routes carry next to their payload. The
+ * client only reads `directory`, but the bridge keeps the project identity so
+ * a workspace-scoped client can tell two checkouts apart.
+ */
+export interface BridgeLocationInfo {
+  directory: string
+  workspaceID?: string
+  project: {
+    id: string
+    directory: string
+  }
+}
+
+export function locationInfo(ctx: BridgeRouteContext): BridgeLocationInfo {
   return {
     directory: ctx.cwd,
     project: { id: projectIdFor(ctx.cwd), directory: ctx.cwd },
   }
 }
 
-export function v2LocationBody(ctx: BridgeRouteContext): { location: LocationInfo; data: unknown[] } {
+export function v2LocationBody(ctx: BridgeRouteContext): { location: BridgeLocationInfo; data: unknown[] } {
   return { location: locationInfo(ctx), data: [] }
 }
 
@@ -452,14 +483,18 @@ export function filterSessionsByDirectory(
 
 export async function sessionView(ctx: BridgeRouteContext, id: string): Promise<SessionView> {
   ctx.state.setCurrentSession(id)
+  // A revert forks the dsh session at the boundary, so the opencode id
+  // points at the fork. The view is built from the fork's summary and
+  // history, while the session keeps its opencode id.
+  const dshId = ctx.state.resolveSessionId(id)
   const list = await cachedSessionList(ctx)
-  const summary = list.find((item) => String(item.sessionId) === id)
+  const summary = list.find((item) => String(item.sessionId) === dshId)
   recordSessionSummaries(ctx, list)
   const cwd = sessionDirectoryFrom(list, summary, ctx.cwd)
-  const history = await cachedSessionHistory(ctx, id)
+  const history = await cachedSessionHistory(ctx, dshId)
   let model: SessionView['model']
   try {
-    const selection = await sessionModelSelectionRef(ctx, id)
+    const selection = await sessionModelSelectionRef(ctx, dshId)
     model = {
       id: selection.modelID,
       providerID: selection.providerID,
@@ -536,6 +571,15 @@ export function oldestSurfaceSeq(events: readonly HistoryEntry[]): number | unde
 export const SESSION_LIST_CACHE_MS = 1000
 export const HISTORY_CACHE_MS = 500
 export const RECENT_HISTORY_PREFETCH = 5
+
+/**
+ * How many sessions the SSE status snapshot reports.
+ *
+ * The snapshot tells a reconnecting client which sessions are busy. It is
+ * bounded so a long-lived bridge does not make every client read hundreds of
+ * session records on connect.
+ */
+export const SESSION_STATUS_SNAPSHOT_LIMIT = 20
 export const LIST_TITLE_WARM_CONCURRENCY = 2
 export const LIST_TITLE_WARM_ALL_MAX = 40
 export const LIST_TITLE_WARM_BACKGROUND_MAX = 24
@@ -551,7 +595,6 @@ export async function cachedSessionList(ctx: BridgeRouteContext): Promise<Sessio
   const cached = ctx.state.getSessionListCache(SESSION_LIST_CACHE_MS)
   if (cached !== undefined) {
     recordSessionSummaries(ctx, cached)
-    ctx.state.markSessionStatusSeeded()
     return cached
   }
   const existing = ctx.state.sessionListLoading
@@ -568,54 +611,10 @@ export async function cachedSessionList(ctx: BridgeRouteContext): Promise<Sessio
       ctx.state.setSessionListCache(items)
     }
     recordSessionSummaries(ctx, items)
-    ctx.state.markSessionStatusSeeded()
     return items
   } finally {
     if (ctx.state.sessionListLoading === promise) ctx.state.sessionListLoading = undefined
   }
-}
-
-/**
- * Seed the authoritative status map at most once when a status poll arrives
- * before the first session list. OpenCode polls `/session/status` every
- * 250ms while a turn is waiting; a failed seed must not turn that poll into a
- * full-corpus disk scan forever.
- */
-export async function ensureSessionStatusSeed(ctx: BridgeRouteContext): Promise<void> {
-  if (ctx.state.sessionStatusSeeded || ctx.state.sessionStatusSeedAttempted) {
-    const loading = ctx.state.sessionStatusLoading
-    if (loading !== undefined) await loading
-    return
-  }
-  ctx.state.sessionStatusSeedAttempted = true
-  ctx.state.sessionStatusSeeds++
-  const loading = cachedSessionList(ctx).then(() => undefined).catch((error: unknown) => {
-    ctx.log(`[bridge/status] initial status seed failed: ${error instanceof Error ? error.message : String(error)}`)
-  })
-  ctx.state.sessionStatusLoading = loading
-  try {
-    await loading
-  } finally {
-    if (ctx.state.sessionStatusLoading === loading) ctx.state.sessionStatusLoading = undefined
-  }
-}
-
-/** Build an in-memory OpenCode v1 status map without touching persistence. */
-export function sessionStatusSnapshot(
-  ctx: BridgeRouteContext,
-  directory?: string,
-): Record<string, SessionStatus> {
-  const normalized = directory === undefined || directory.length === 0 ? undefined : resolve(ctx.cwd, directory)
-  const ids = new Set([...ctx.state.sessionRunning.keys(), ...ctx.state.sessionDirectories.keys()])
-  const status: Record<string, SessionStatus> = {}
-  for (const id of ids) {
-    const sessionDirectory = ctx.state.sessionDirectories.get(id) ?? ctx.cwd
-    if (normalized !== undefined && resolve(ctx.cwd, sessionDirectory) !== normalized) continue
-    const running = ctx.state.sessionRunningFor(id)
-    if (running === undefined) continue
-    status[id] = running ? { type: 'busy' } : { type: 'idle' }
-  }
-  return status
 }
 
 /** Read a history page through a short-lived per-page cache. */
@@ -762,23 +761,11 @@ export async function skillList(
   return skills
 }
 
-/** dsh skills exposed as opencode v1 slash commands. */
-export async function skillCommandsV1(
-  ctx: BridgeRouteContext,
-  directory: string | undefined,
-): Promise<V1Command[]> {
-  return (await skillList(ctx, directory)).map((skill) => ({
-    name: skill.name,
-    description: skill.description,
-    template: skill.name,
-  }))
-}
-
 /** dsh skills exposed as opencode v2 slash commands. */
 export async function skillCommandsV2(
   ctx: BridgeRouteContext,
   directory: string | undefined,
-): Promise<CommandV2Info[]> {
+): Promise<BridgeCommandInfo[]> {
   return (await skillList(ctx, directory)).map((skill) => ({
     name: skill.name,
     template: skill.name,
@@ -816,56 +803,100 @@ export function fakeSkillEntries(): Array<{ name: string; description: string; w
   }))
 }
 
-export function toV1Session(view: SessionView, id: string, ctx: BridgeRouteContext): V2Session {
-  if (view.summary) {
-    return convertSessionSummary(view.summary, {
-      cwd: view.cwd ?? ctx.cwd,
-      createdAt: view.createdAt,
-      ...(view.model === undefined ? {} : { model: view.model }),
-      ...(ctx.state.sessionAgentFor(id) === undefined
-        ? {}
-        : { agent: ctx.state.sessionAgentFor(id) }),
-    })
+/**
+ * The project the bridge serves.
+ *
+ * The official opencode server derives its project list from the directories
+ * it serves, so the bridge publishes the working directory it runs in. A
+ * browser UI picks a workspace from that list.
+ */
+export function projectInfo(ctx: BridgeRouteContext): {
+  id: string
+  canonical: string
+  name: string
+  time: { created: number; updated: number; active: number }
+  sandboxes: string[]
+} {
+  const directory = ctx.cwd
+  return {
+    id: projectIdFor(directory),
+    canonical: directory,
+    name: directory.split(/[/\\]+/).filter(Boolean).pop() ?? directory,
+    time: { created: 0, updated: 0, active: 0 },
+    sandboxes: [],
   }
-  return minimalSession(id, {
-    cwd: view.cwd ?? ctx.cwd,
-    createdAt: view.createdAt,
-    ...(view.model === undefined ? {} : { model: view.model }),
-    ...(ctx.state.sessionAgentFor(id) === undefined
-      ? {}
-      : { agent: ctx.state.sessionAgentFor(id) }),
-    ...(ctx.state.sessionParents.get(id) === undefined
-      ? {}
-      : { parentID: ctx.state.sessionParents.get(id) }),
-    ...sessionLineageOptions(ctx, id),
-  })
 }
 
 export function toV2Session(view: SessionView, id: string, ctx: BridgeRouteContext): SessionV2InfoWithMetadata {
-  if (view.summary) {
-    const lineage = sessionLineageOptions(ctx, id)
-    return convertSessionSummaryV2(view.summary, {
+  const revert = stagedRevertFor(ctx, id)
+  const published = view.summary === undefined
+    ? minimalSessionV2(id, {
       cwd: view.cwd ?? ctx.cwd,
       createdAt: view.createdAt,
       ...(view.model === undefined ? {} : { model: view.model }),
       ...(ctx.state.sessionAgentFor(id) === undefined
         ? {}
         : { agent: ctx.state.sessionAgentFor(id) }),
-      ...(lineage.metadata === undefined ? {} : { metadata: lineage.metadata }),
+      ...(ctx.state.sessionParents.get(id) === undefined
+        ? {}
+        : { parentID: ctx.state.sessionParents.get(id) }),
+      ...sessionLineageOptions(ctx, id),
+      ...(revert === undefined ? {} : { revert }),
     })
+    : convertSessionSummaryV2(view.summary, {
+      cwd: view.cwd ?? ctx.cwd,
+      createdAt: view.createdAt,
+      ...(view.model === undefined ? {} : { model: view.model }),
+      ...(ctx.state.sessionAgentFor(id) === undefined
+        ? {}
+        : { agent: ctx.state.sessionAgentFor(id) }),
+      ...(sessionLineageOptions(ctx, id).metadata === undefined
+        ? {}
+        : { metadata: sessionLineageOptions(ctx, id).metadata }),
+      ...(revert === undefined ? {} : { revert }),
+    })
+  // The session keeps the id the client knows it by. A revert moves the
+  // conversation to a fork, so the summary carries the fork's dsh id while
+  // the published record keeps the original one.
+  return { ...published, id }
+}
+
+/**
+ * The staged revert of a session in the shape OpenCode reports it
+ * (`Session.Info.revert`).
+ */
+export function stagedRevertFor(
+  ctx: BridgeRouteContext,
+  sessionId: string,
+): { messageID: string; files?: Array<{ file: string; patch: string; additions: number; deletions: number; status: 'added' | 'deleted' | 'modified' }> } | undefined {
+  const staged = ctx.state.revertBoundary(sessionId)
+  if (staged === undefined) return undefined
+  return {
+    messageID: staged.messageID,
+    ...(staged.files.length === 0 ? {} : { files: staged.files }),
   }
-  return minimalSessionV2(id, {
-    cwd: view.cwd ?? ctx.cwd,
-    createdAt: view.createdAt,
-    ...(view.model === undefined ? {} : { model: view.model }),
-    ...(ctx.state.sessionAgentFor(id) === undefined
-      ? {}
-      : { agent: ctx.state.sessionAgentFor(id) }),
-    ...(ctx.state.sessionParents.get(id) === undefined
-      ? {}
-      : { parentID: ctx.state.sessionParents.get(id) }),
-    ...sessionLineageOptions(ctx, id),
-  })
+}
+
+/**
+ * Publish one OpenCode 2.x native event from a route handler.
+ *
+ * The dsh event translator owns the events that come from a session's
+ * history, but a few OpenCode features (the revert boundary) are driven by
+ * the client and have no dsh counterpart, so the route publishes them
+ * itself.
+ */
+export function publishV2Event(
+  ctx: BridgeRouteContext,
+  type: string,
+  data: Record<string, unknown>,
+  sessionId?: string,
+): void {
+  const directory = sessionId === undefined
+    ? ctx.cwd
+    : ctx.state.sessionDirectories.get(sessionId) ?? ctx.cwd
+  ctx.hub.broadcast([
+    makeV2Event(directory, type, data, projectIdFor(directory), sessionId),
+  ])
 }
 
 export async function modelGroups(ctx: BridgeRouteContext) {
@@ -985,124 +1016,106 @@ export function parsePromptParts(raw: unknown, cwd: string): PromptContentPart[]
   return parts
 }
 
-/** Optional model/agent a provisional card should carry. */
-export interface PendingAssistantOptions {
-  id?: string
-  parentID?: string
-  /** External (opencode-facing) provider/model ref; defaults to legacy values. */
-  model?: { providerID: string; modelID: string; variant?: string }
-  /** dsh agent-preset id surfaced as the OpenCode `mode`. */
-  agent?: string
-}
-
-/** Session-scoped model/agent for provisional placeholder cards. */
-export function placeholderSessionOptions(
-  ctx: BridgeRouteContext,
-  sessionId: string,
-): Pick<PendingAssistantOptions, 'model' | 'agent'> {
-  const model = ctx.state.sessionModelSelectionFor(sessionId)
-  const agent = ctx.state.sessionAgentFor(sessionId)
-  return {
-    ...(model === undefined ? {} : { model }),
-    ...(agent === undefined ? {} : { agent }),
-  }
-}
-
 /**
- * Prompt-response variant of {@link placeholderSessionOptions}: a brand-new
- * session's first prompt may carry no model (the TUI has not learned one yet),
- * so fall back to the deployment default instead of the legacy `deepseek-chat`.
+ * Convert an OpenCode v2 prompt body into dsh content parts.
+ *
+ * The v2 client sends `{ text, files, agents, skills, metadata }` rather than
+ * the v1 `parts` array. `files` entries carry a `uri` (not a v1 `url`) and
+ * optional `mime`, so each one is normalised into the v1 file-part shape
+ * before the shared file reader runs.
  */
-export async function placeholderSessionOptionsForPrompt(
-  ctx: BridgeRouteContext,
-  sessionId: string,
-  requested?: SessionModelSelectionRef,
-): Promise<PendingAssistantOptions> {
-  const model = ctx.state.sessionModelSelectionFor(sessionId)
-    ?? requested
-    ?? await defaultModelRef(ctx)
-  const agent = ctx.state.sessionAgentFor(sessionId)
-  return {
-    model,
-    ...(agent === undefined ? {} : { agent }),
+export function parseV2PromptInput(body: unknown, cwd: string): PromptContentPart[] {
+  const record = bodyAsRecord(body)
+  const parts: PromptContentPart[] = []
+  const text = typeof record.text === 'string' ? record.text : ''
+  if (text.length > 0) parts.push({ type: 'text', text })
+
+  if (Array.isArray(record.files)) {
+    for (const entry of record.files) {
+      if (entry === null || typeof entry !== 'object') throw badRequest('invalid prompt file')
+      const file = entry as { uri?: unknown; mime?: unknown; name?: unknown }
+      const uri = typeof file.uri === 'string' ? file.uri : ''
+      if (uri.length === 0) throw badRequest('prompt file requires a uri')
+      const mime = typeof file.mime === 'string' && file.mime.length > 0
+        ? file.mime
+        : mimeFromPath(uri)
+      parts.push(filePartToContent({ url: uri, mime, name: file.name }, cwd))
+    }
   }
+
+  if (Array.isArray(record.agents) && record.agents.length > 0) {
+    const names = record.agents
+      .map((entry) => (entry !== null && typeof entry === 'object'
+        ? (entry as { name?: unknown }).name
+        : undefined))
+      .filter((name): name is string => typeof name === 'string' && name.length > 0)
+    if (names.length > 0) {
+      parts.push({ type: 'text', text: `@${names.join(' @')}` })
+    }
+  }
+
+  if (Array.isArray(record.skills) && record.skills.length > 0) {
+    const names = record.skills
+      .map((entry) => (entry !== null && typeof entry === 'object'
+        ? (entry as { id?: unknown }).id
+        : undefined))
+      .filter((id): id is string => typeof id === 'string' && id.length > 0)
+    if (names.length > 0) {
+      parts.push({ type: 'text', text: `/skill ${names.join(' /skill ')}` })
+    }
+  }
+
+  if (parts.length === 0) throw badRequest('prompt body requires text or files')
+  return parts
 }
 
-export function pendingAssistantPlaceholder(
-  sessionID: string,
-  cwd: string,
-  text?: string,
-  options: PendingAssistantOptions = {},
-): V1MessageEntry {
-  const model = options.model ?? { providerID: 'deepseek', modelID: 'deepseek-chat' }
-  const info: V1MessageEntry['info'] = {
-    id: options.id ?? `pending:${randomUUID()}`,
-    sessionID,
-    role: 'assistant',
-    time: { created: Date.now() },
-    parentID: options.parentID ?? `pending:${randomUUID()}`,
-    modelID: model.modelID,
-    providerID: model.providerID,
-    mode: options.agent ?? DEFAULT_AGENT_NAME,
-    path: { cwd, root: cwd },
-    cost: 0,
-    tokens: {
-      input: 0,
-      output: 0,
-      reasoning: 0,
-      cache: { read: 0, write: 0 },
-    },
+/** Guess a mime type from a file path so a v2 `uri` without a mime still loads. */
+function mimeFromPath(uri: string): string {
+  const path = uri.startsWith('file://') ? uri.slice('file://'.length) : uri
+  const ext = extname(path).toLowerCase()
+  const known: Record<string, string> = {
+    '.txt': 'text/plain',
+    '.md': 'text/markdown',
+    '.ts': 'text/plain',
+    '.tsx': 'text/plain',
+    '.js': 'text/plain',
+    '.jsx': 'text/plain',
+    '.json': 'application/json',
+    '.yaml': 'application/yaml',
+    '.yml': 'application/yaml',
+    '.toml': 'application/toml',
+    '.sh': 'text/x-sh',
+    '.py': 'text/x-python',
+    '.rs': 'text/plain',
+    '.go': 'text/plain',
+    '.c': 'text/plain',
+    '.h': 'text/plain',
+    '.cpp': 'text/plain',
+    '.hpp': 'text/plain',
+    '.java': 'text/plain',
+    '.sql': 'text/plain',
+    '.css': 'text/plain',
+    '.html': 'text/plain',
+    '.xml': 'text/xml',
+    '.csv': 'text/csv',
+    '.log': 'text/plain',
+    '.png': 'image/png',
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.gif': 'image/gif',
+    '.webp': 'image/webp',
+    '.svg': 'image/svg+xml',
   }
-  return {
-    info,
-    parts: text === undefined
-      ? []
-      : [{
-          id: `pending:${randomUUID()}`,
-          sessionID,
-          messageID: info.id,
-          type: 'text',
-          text,
-          time: { start: Date.now() },
-        }],
-  }
+  return known[ext] ?? 'application/octet-stream'
 }
 
+/** Optional model/agent a provisional card should carry. */
 /**
- * Append the live provisional assistant (dsh 0.1.5: no durable chunks) to one
- * v1 history page. The entry keeps `time.completed` unset so the OpenCode TUI
+ * Append the live provisional assistant (dsh 0.1.5: no durable chunks) to the
+ * 2.x history page. The entry keeps `time.completed` unset so the OpenCode TUI
  * and the queue-ordering oracle see the same in-flight contract as 0.1.2,
  * where the partial assistant was present in the durable log.
  */
-export function mergePendingAssistantV1(
-  ctx: BridgeRouteContext,
-  sessionId: string,
-  entries: Array<{ info: Record<string, unknown>; parts: Array<Record<string, unknown>> }>,
-): void {
-  const snapshot = ctx.pendingAssistant?.(sessionId)
-  if (snapshot === undefined) return
-  if (entries.some((entry) => String(entry.info.id ?? '') === snapshot.id)) return
-  const placeholder = pendingAssistantPlaceholder(sessionId, ctx.cwd, undefined, {
-    id: snapshot.id,
-    ...(snapshot.parentID === undefined ? {} : { parentID: snapshot.parentID }),
-    ...placeholderSessionOptions(ctx, sessionId),
-  })
-  placeholder.info.time = { created: snapshot.created }
-  placeholder.parts = snapshot.parts.map((part) => ({
-    id: part.id,
-    sessionID: sessionId,
-    messageID: snapshot.id,
-    type: part.type,
-    text: part.text,
-    time: {
-      start: part.start,
-      ...(part.end === undefined ? {} : { end: part.end }),
-    },
-  })) as V1MessageEntry['parts']
-  entries.push(placeholder as unknown as { info: Record<string, unknown>; parts: Array<Record<string, unknown>> })
-}
-
-/** v2 counterpart of {@link mergePendingAssistantV1}. */
 export function mergePendingAssistantV2(
   ctx: BridgeRouteContext,
   sessionId: string,
@@ -1146,62 +1159,53 @@ export function mergePendingAssistantV2(
   })
 }
 
-/** Count user messages still pending in the dsh inbox queue for a session. */
-export function queuedPromptCount(ctx: BridgeRouteContext, sessionId: string): number {
-  const projection = ctx.state.inboxProjections.get(sessionId)
-  if (projection === undefined) return 0
-  return [...projection.nextTurn, ...projection.nextStep]
-    .filter((message) => message.source.kind === 'user')
-    .length
-}
-
-/**
- * Append a queue-backlog hint to a slash command outcome so the user sees why
- * older prompts keep running after e.g. `/goal` completes.
- */
-export function slashOutcomeText(ctx: BridgeRouteContext, sessionId: string, text: string): string {
-  const pending = queuedPromptCount(ctx, sessionId)
-  if (pending === 0) return text
-  return `${text}\n\n[dsh-oc] 队列中还有 ${pending} 条消息待处理，将按原顺序继续执行`
-}
-
 /** The dsh-oc bridge exposes one primary agent so the TUI prompt stays usable. */
 export const DEFAULT_AGENT_NAME = 'build'
 
-export const PRESET_COMMAND_V1: V1Command = {
+/**
+ * The command entry the 2.1.0 `/api/command` route publishes. The client
+ * type only declares `name` and `description`, but the bridge also carries
+ * the slash template the TUI renders.
+ */
+export interface BridgeCommandInfo extends ClientCommandInfo {
+  template: string
+}
+
+export const PRESET_COMMAND_V2: BridgeCommandInfo = {
   name: 'preset',
-  description: 'List or switch the session dsh agent preset',
-  template: 'preset',
-}
-
-export const PRESET_COMMAND_V2: CommandV2Info = {
-  name: 'preset',
   template: 'preset',
   description: 'List or switch the session dsh agent preset',
 }
 
-export const GOAL_COMMAND_V1: V1Command = {
-  name: 'goal',
-  description: 'Set or view the goal for a long-running task',
-  template: 'goal',
-}
-
-export const GOAL_COMMAND_V2: CommandV2Info = {
+export const GOAL_COMMAND_V2: BridgeCommandInfo = {
   name: 'goal',
   template: 'goal',
   description: 'Set or view the goal for a long-running task',
 }
 
-export const HELP_COMMAND_V1: V1Command = {
+export const HELP_COMMAND_V2: BridgeCommandInfo = {
   name: 'help',
-  description: 'Show the dsh-oc capability summary and documentation entry points',
   template: 'help',
+  description: 'Show the dsh-oc capability summary and documentation entry points',
 }
 
-export const HELP_COMMAND_V2: CommandV2Info = {
-  name: 'help',
-  template: 'help',
-  description: 'Show the dsh-oc capability summary and documentation entry points',
+/**
+ * The provider request the 2.1.0 agent entry carries. The client type also
+ * declares a `settings` block, but the bridge keeps the `{ headers, body }`
+ * shape the TUI reads.
+ */
+export interface BridgeProviderRequest {
+  headers: Record<string, string>
+  body: Record<string, unknown>
+}
+
+/**
+ * The agent entry the 2.1.0 `/api/agent` route publishes. The client type
+ * declares a `name`, but the bridge addresses the presets by their dsh id and
+ * leaves the display name out.
+ */
+export type BridgeAgentInfo = Omit<ClientAgentInfo, 'name' | 'request'> & {
+  request: BridgeProviderRequest
 }
 
 export async function defaultAgents(ctx: BridgeRouteContext): Promise<{
@@ -1330,40 +1334,12 @@ export function promptModelRef(
 }
 
 /**
- * The agent list the TUI cycles with Tab and shows on a fresh prompt. The
- * first entry is the TUI's default selection, so it must be the deployment's
- * configured default preset — not the hardcoded "build" placeholder — or a
- * fresh session claims a preset the harness never runs.
+ * The agent list the 2.1.0 client reads. The first entry is the default
+ * selection, so it must be the deployment's configured default preset — not
+ * the hardcoded "build" placeholder — or a fresh session claims a preset the
+ * harness never runs.
  */
-export async function v1AgentList(ctx: BridgeRouteContext): Promise<V2Agent[]> {
-  const { providerID, modelID } = await defaultAgents(ctx)
-  const presets = await presetRoster(ctx)
-  const defaultId = await defaultPresetId(ctx)
-  const defaultName = defaultId ?? DEFAULT_AGENT_NAME
-  return [
-    {
-      name: defaultName,
-      description: defaultName === DEFAULT_AGENT_NAME
-        ? 'dsh-oc default build agent'
-        : 'dsh-oc default agent (dsh default preset)',
-      mode: 'primary',
-      permission: [],
-      options: {},
-      model: { providerID, modelID },
-    },
-    ...presets
-      .filter((preset) => preset.id !== DEFAULT_AGENT_NAME && preset.id !== defaultId)
-      .map((preset) => ({
-        name: preset.id,
-        description: preset.name ?? preset.description,
-        mode: 'primary' as const,
-        permission: [],
-        options: {},
-      })),
-  ]
-}
-
-export async function v2AgentList(ctx: BridgeRouteContext): Promise<AgentV2Info[]> {
+export async function v2AgentList(ctx: BridgeRouteContext): Promise<BridgeAgentInfo[]> {
   const { providerID, modelID } = await defaultAgents(ctx)
   const presets = await presetRoster(ctx)
   const defaultId = await defaultPresetId(ctx)
@@ -1589,6 +1565,7 @@ export async function broadcastPromptUserMessage(
   text: string,
   created: number,
   model?: { providerID: string; modelID: string; variant?: string },
+  delivery: 'steer' | 'queue' = 'steer',
 ): Promise<void> {
   const directory = ctx.state.sessionDirectories.get(sessionId) ?? ctx.cwd
   const project = projectIdFor(directory)
@@ -1623,6 +1600,17 @@ export async function broadcastPromptUserMessage(
   // duplicate and the first prompt vanishes from a cold attach.  The helper
   // still remembers the batch in the Last-Event-ID ring exactly once.
   ctx.hub.broadcastAndBufferIfIdle(events)
+  // The 2.x vocabulary keeps the submitted prompt in the session inbox until
+  // the model takes it; the prompt route is where it is accepted.
+  ctx.hub.broadcastAndBufferIfIdle([makeV2Event(directory, 'session.inbox.enqueued', {
+    sessionID: sessionId,
+    inboxID: userId,
+    item: {
+      type: 'user',
+      payload: { text },
+      delivery,
+    },
+  }, project, sessionId)])
 }
 
 /** Run a `/preset` list/switch with visible TUI progress and result. */
@@ -1769,21 +1757,18 @@ export function runHelpCommand(
   return { kind: 'success', text }
 }
 
-/** Dispatch a captured slash command to its bridge-side implementation. */
+/**
+ * Dispatch a captured slash command to its bridge-side implementation.
+ */
 export async function runSlashCommand(
   ctx: BridgeRouteContext,
   sessionId: string,
   slash: SlashPromptCapture,
 ): Promise<PresetCommandOutcome | RegistryCommandOutcome> {
-  let outcome: PresetCommandOutcome | RegistryCommandOutcome
-  if (slash.name === 'preset') outcome = await runPresetCommand(ctx, sessionId, slash.argument)
-  else if (slash.name === 'goal') outcome = await runGoalCommand(ctx, sessionId, slash.argument)
-  else if (slash.name === 'help') outcome = runHelpCommand(ctx, sessionId, slash.argument)
-  else throw badRequest(`unsupported command /${slash.name}`)
-  if (outcome.kind === 'success') {
-    outcome = { ...outcome, text: slashOutcomeText(ctx, sessionId, outcome.text) }
-  }
-  return outcome
+  if (slash.name === 'preset') return await runPresetCommand(ctx, sessionId, slash.argument)
+  if (slash.name === 'goal') return await runGoalCommand(ctx, sessionId, slash.argument)
+  if (slash.name === 'help') return runHelpCommand(ctx, sessionId, slash.argument)
+  throw badRequest(`unsupported command /${slash.name}`)
 }
 
 interface ModelInput {
@@ -1951,50 +1936,168 @@ export async function applyAgentFromBody(
 }
 
 /**
- * dsh `session.fork` anchors on a completed-turn boundary by event seq.
- * opencode's fork payload names a message id, so translate it to the seq of
- * that message's user/assistant event (dsh documents message-fork buttons as
- * passing the message seq; the boundary then closes at the following
- * turn/end, which includes the whole turn).
+ * Where an OpenCode message lives in the dsh event log.
+ */
+export interface MessageLocation {
+  /** The dsh event seq that carries the message. */
+  seq: number
+  /**
+   * The dsh turn the message belongs to. A `user/message` event carries no
+   * turn of its own, so the turn is the last one a `turn/start` event opened.
+   */
+  turn: number
+  /**
+   * Whether the boundary message is the user prompt of its turn or the
+   * assistant reply. OpenCode rolls back the files of the assistant messages
+   * that come *after* the boundary, so a user prompt also rolls back the
+   * files its own turn changed, while an assistant reply does not.
+   */
+  role: 'user' | 'assistant'
+}
+
+/**
+ * The dsh event seq that carries the OpenCode message `messageId`, and the
+ * turn it belongs to.
+ *
+ * Message lists expose bridge ids for prompts echoed by the route, so the id
+ * is resolved back to the durable dsh id before the history is scanned.
+ */
+export async function locateMessage(
+  ctx: BridgeRouteContext,
+  sessionId: string,
+  messageId: string,
+): Promise<MessageLocation> {
+  const resolved = ctx.state.dshIdForPromptId(sessionId, messageId)
+    ?? ctx.state.dshIdForAssistantId(sessionId, messageId)
+    ?? messageId
+  const history = await cachedSessionHistory(ctx, sessionId)
+  let turn = 0
+  for (const entry of history.events) {
+    const event = entry.event
+    if (event.type === 'turn/start') {
+      const opened = Number(event.data.turn)
+      if (Number.isFinite(opened)) turn = opened
+      continue
+    }
+    const candidate = event.type === 'user/message'
+      ? String(event.data.id)
+      : event.type === 'assistant/message'
+        ? String(event.data.message.id)
+        : undefined
+    if (candidate === resolved) {
+      const own = event.type === 'assistant/message' ? Number(event.data.turn) : Number.NaN
+      return {
+        seq: event.seq,
+        turn: Number.isFinite(own) ? own : turn,
+        role: event.type === 'assistant/message' ? 'assistant' : 'user',
+      }
+    }
+  }
+  throw badRequest('message not found for fork', { sessionId, messageId, resolved })
+}
+
+/**
+ * The dsh event seq that carries the OpenCode message `messageId`.
  */
 export async function atSeqForMessage(
   ctx: BridgeRouteContext,
   sessionId: string,
   messageId: string,
 ): Promise<number> {
-  // Message lists expose bridge ids for prompts echoed by the route; resolve
-  // them back to the durable dsh id before scanning history.
-  const resolved = ctx.state.dshIdForPromptId(sessionId, messageId)
-    ?? ctx.state.dshIdForAssistantId(sessionId, messageId)
-    ?? messageId
-  const history = await cachedSessionHistory(ctx, sessionId)
-  for (const entry of history.events) {
-    const event = entry.event
-    const candidate = event.type === 'user/message'
-      ? String(event.data.id)
-      : event.type === 'assistant/message'
-        ? String(event.data.message.id)
-        : undefined
-    if (candidate === resolved) return event.seq
+  return (await locateMessage(ctx, sessionId, messageId)).seq
+}
+
+/**
+ * The inclusive dsh event seq a fork has to cut at to drop `messageId` and
+ * everything after it.
+ *
+ * OpenCode's cut points are exclusive in both shapes that use them:
+ *
+ * - `POST /api/session/:id/fork` with `before` copies the messages whose seq
+ *   is *less* than the boundary message's seq.
+ * - `POST /api/session/:id/revert/commit` deletes the messages whose seq is
+ *   *greater than or equal* to the boundary message's seq.
+ *
+ * dsh's `session.fork` takes an inclusive event seq (`buildForkSeed` copies
+ * `events.slice(0, boundary + 1)`), so the cut has to move one event back.
+ * The event right before the message is the last event of the previous turn
+ * (a tool result, a turn marker or the previous message), so the fork keeps
+ * every message that precedes the cut and nothing after it.
+ */
+export async function atSeqBeforeMessage(
+  ctx: BridgeRouteContext,
+  sessionId: string,
+  messageId: string,
+): Promise<number> {
+  const location = await locateMessage(ctx, sessionId, messageId)
+  if (location.seq <= 0) {
+    // dsh cannot express an empty fork: `atSeq` must be a non-negative
+    // integer, so a cut before the very first event has no representation.
+    throw badRequest('cannot cut before the first message', { sessionId, messageId, seq: location.seq })
   }
-  throw badRequest('message not found for fork', { sessionId, messageId, resolved })
+  return location.seq - 1
+}
+
+/**
+ * Commit the staged revert of a session.
+ *
+ * OpenCode commits a staged revert when the next prompt arrives, so the
+ * bridge does the same. The conversation is forked at the boundary and the
+ * opencode session id keeps pointing at the fork, so the client keeps
+ * talking to the same session while the transcript is trimmed.
+ */
+export async function commitStagedRevert(
+  ctx: BridgeRouteContext,
+  sessionId: string,
+): Promise<boolean> {
+  const staged = ctx.state.revertBoundary(sessionId)
+  if (staged === undefined) return false
+  const rewind = ctx.api.rewind
+  if (rewind !== undefined) {
+    // The file snapshots are keyed by the dsh session the turn ran in, so
+    // they are looked up under the session the opencode id points at.
+    const dshId = ctx.state.resolveSessionId(sessionId)
+    const atSeq = await atSeqBeforeMessage(ctx, sessionId, staged.messageID)
+    const childId = await rewind.fork(sessionId, atSeq)
+    rewind.setAlias(sessionId, childId)
+    // The fork inherits the conversation, so its per-session state (model,
+    // agent, title, message ids) follows it.
+    ctx.state.inheritSessionState(sessionId, childId)
+    ctx.state.setSessionAlias(sessionId, childId)
+    ctx.state.setCurrentSession(sessionId)
+    ctx.state.invalidateSession()
+    // The files were already rolled back when the revert was staged; the
+    // commit keeps them there and drops the undo state.
+    rewind.commitRestore(dshId)
+  }
+  ctx.state.clearRevert(sessionId)
+  publishV2Event(ctx, 'session.revert.committed', {
+    sessionID: sessionId,
+    to: staged.messageID,
+  }, sessionId)
+  return true
 }
 
 export async function forkSession(
   req: BridgeRequest,
   ctx: BridgeRouteContext,
-  v2: boolean,
 ): Promise<HandlerResult> {
   const id = req.params.id ?? req.params.sessionID ?? ''
   const body = bodyAsRecord(req.body)
-  const messageId = typeof body.messageID === 'string' ? body.messageID : undefined
-  const atSeq = messageId === undefined ? undefined : await atSeqForMessage(ctx, id, messageId)
+  // The v2 client names the cut point `before`; older clients used `messageID`.
+  const rawMessageId = typeof body.before === 'string' && body.before.length > 0
+    ? body.before
+    : typeof body.messageID === 'string' && body.messageID.length > 0
+      ? body.messageID
+      : undefined
+  // `before` is exclusive: the named message is not part of the fork.
+  const atSeq = rawMessageId === undefined
+    ? undefined
+    : await atSeqBeforeMessage(ctx, id, rawMessageId)
   const childId = await forkFromSource(ctx, id, atSeq)
   ctx.state.setCurrentSession(childId)
   const view = await sessionView(ctx, childId)
-  return json(200, v2
-    ? { data: toV2Session(view, childId, ctx) }
-    : toV1Session(view, childId, ctx))
+  return json(200, { data: toV2Session(view, childId, ctx) })
 }
 
 /**
@@ -2052,6 +2155,9 @@ export async function forkFromSource(
     ...(atSeq === undefined ? {} : { atSeq }),
   })
   const childId = String(result.sessionId)
+  // The fork inherits the conversation, so its per-session state (model,
+  // agent, title, message ids) follows it.
+  ctx.state.inheritSessionState(sourceId, childId)
   try {
     await rpc(ctx, 'session.rename', { sessionId: sid(childId), title })
   } catch (error) {
@@ -2113,7 +2219,6 @@ export async function runCompactCommand(
 export async function createSession(
   req: BridgeRequest,
   ctx: BridgeRouteContext,
-  v2: boolean,
 ): Promise<HandlerResult> {
   const body = bodyAsRecord(req.body)
   const parentID = typeof body.parentID === 'string' ? body.parentID : undefined
@@ -2166,7 +2271,7 @@ export async function createSession(
   ctx.state.setCurrentSession(id)
   ctx.state.invalidateSession()
   const view = await sessionView(ctx, id)
-  return json(200, v2 ? { data: toV2Session(view, id, ctx) } : toV1Session(view, id, ctx))
+  return json(200, { data: toV2Session(view, id, ctx) })
 }
 
 /**
@@ -2184,6 +2289,7 @@ export function hostSessionAddedEvents(
   payload: {
     sessionId?: unknown
     blank?: unknown
+    agentAvailable?: unknown
     parentSessionId?: unknown
     origin?: unknown
     cwd?: unknown
@@ -2197,7 +2303,9 @@ export function hostSessionAddedEvents(
     sessionId: sessionId as never,
     updatedAt: Date.now(),
     running: false,
+    agentAvailable: false,
     blank: payload.blank !== false,
+    ...(payload.agentAvailable === undefined ? {} : { agentAvailable: payload.agentAvailable === true }),
     ...(payload.parentSessionId === undefined ? {} : { parentSessionId: String(payload.parentSessionId) as never }),
     ...(payload.origin === 'subagent' ? { origin: 'subagent' as const } : {}),
     ...(payload.cwd === undefined ? {} : { cwd: String(payload.cwd) }),
@@ -2221,6 +2329,18 @@ export function hostSessionAddedEvents(
         ...sessionLineageOptions(ctx, sessionId),
       }),
     }, project),
+    // The 2.x vocabulary announces a session with its own record; a 2.x
+    // client cannot route any later event of the session without it.
+    makeV2Event(directory, 'session.created', {
+      sessionID: sessionId,
+      projectID: project,
+      location: { directory },
+      slug: sessionId,
+      title: ctx.state.sessionTitleFor(sessionId) ?? '',
+      ...(parentID === undefined ? {} : { parentID }),
+      ...(agent === undefined ? {} : { agent }),
+      version: OPENCODE_VERSION,
+    }, project, sessionId),
   ]
   const call = [...ctx.state.subagentCalls.values()]
     .find((candidate) => candidate.childSessionId === sessionId && candidate.partEmitted === true)
@@ -2345,11 +2465,20 @@ export async function questionReply(
   // `question.replied` broadcast the opencode TUI never closes the dialog,
   // so the next prompt's keystrokes land in the still-open dialog.
   const qDirectory = ctx.state.sessionDirectories.get(entry.sessionId) ?? ctx.cwd
-  ctx.hub.broadcast([makeEvent(qDirectory, 'question.replied', {
-    sessionID: entry.sessionId,
-    requestID: entry.opencodeId,
-    answers,
-  }, projectIdFor(qDirectory))])
+  ctx.hub.broadcast([
+    makeEvent(qDirectory, 'question.replied', {
+      sessionID: entry.sessionId,
+      requestID: entry.opencodeId,
+      answers,
+    }, projectIdFor(qDirectory)),
+    // The 2.x vocabulary settled the form, not the 1.18.18 question.
+    makeV2Event(qDirectory, 'form.replied', {
+      id: entry.opencodeId,
+      formID: entry.opencodeId,
+      sessionID: entry.sessionId,
+      answer: toFormAnswer(entry, answers as Array<Array<string>>),
+    }, projectIdFor(qDirectory), entry.sessionId),
+  ])
 }
 
 export async function questionReject(
@@ -2367,20 +2496,17 @@ export async function questionReject(
   ctx.state.removeQuestion(requestID)
   // Same as questionReply: broadcast the reject so the TUI closes the dialog.
   const qDirectory = ctx.state.sessionDirectories.get(entry.sessionId) ?? ctx.cwd
-  ctx.hub.broadcast([makeEvent(qDirectory, 'question.rejected', {
-    sessionID: entry.sessionId,
-    requestID: entry.opencodeId,
-  }, projectIdFor(qDirectory))])
-}
-
-export function producedFilesV1(diffs: readonly { file?: string; additions: number; deletions: number }[]): V1FileDiff[] {
-  return diffs.map((diff) => ({
-    file: diff.file ?? '',
-    before: '',
-    after: '',
-    additions: diff.additions,
-    deletions: diff.deletions,
-  }))
+  ctx.hub.broadcast([
+    makeEvent(qDirectory, 'question.rejected', {
+      sessionID: entry.sessionId,
+      requestID: entry.opencodeId,
+    }, projectIdFor(qDirectory)),
+    makeV2Event(qDirectory, 'form.cancelled', {
+      id: entry.opencodeId,
+      formID: entry.opencodeId,
+      sessionID: entry.sessionId,
+    }, projectIdFor(qDirectory), entry.sessionId),
+  ])
 }
 
 export function historyChanges(history: { events: HistoryEntry[] }): FileChange[] {
@@ -2396,8 +2522,8 @@ export function historyChanges(history: { events: HistoryEntry[] }): FileChange[
         ...(entry.view?.for === 'call' ? { view: entry.view } : {}),
       })
     } else if (event.type === 'tool/result') {
-      const block = event.data.message.content[0] as ToolResultBlock | undefined
-      const callId = String(block?.toolCallId ?? event.data.message.source.callId)
+      const message = event.data.message as { toolCallId?: unknown; source?: { callId?: unknown } }
+      const callId = String(message.toolCallId ?? message.source?.callId ?? '')
       const call = calls.get(callId)
       if (!call) continue
       changes.push(...fileChangesFromToolResult(call, {
@@ -2418,7 +2544,7 @@ export function historyFileDiffs(history: { events: HistoryEntry[]; projections?
   if (values?.['produced-files'] !== undefined) {
     return convertProducedFiles(values['produced-files'])
   }
-  return toSnapshotFileDiffs(historyChanges(history))
+  return toFileDiffInfos(historyChanges(history))
 }
 
 /**
@@ -2509,6 +2635,32 @@ export function createBridgeRouter(
   }
   const routes: Route[] = []
 
+  /**
+   * Publish a batch of events, rewriting the session id of the sessions
+   * that a revert moved to a fork.
+   *
+   * A revert forks the dsh session at the boundary, so the events of the
+   * fork carry the new dsh id while the clients know the session under its
+   * original id.
+   */
+  function broadcastEvents(events: BridgeGlobalEvent[]): void {
+    if (events.length === 0) return
+    const aliases = state.aliasedSessionIds()
+    if (aliases.length === 0) {
+      hub.broadcast(events)
+      return
+    }
+    hub.broadcast(events.map((event) => {
+      let mapped = event
+      for (const opencodeId of aliases) {
+        const dshId = state.resolveSessionId(opencodeId)
+        if (dshId === opencodeId) continue
+        mapped = mapEventSessionId(mapped, dshId, opencodeId)
+      }
+      return mapped
+    }))
+  }
+
   const register = (
     method: string,
     pattern: string,
@@ -2533,19 +2685,24 @@ export function createBridgeRouter(
   function startSse(req: BridgeRequest, res: ServerResponse): void {
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
+      'Cache-Control': 'no-cache, no-transform',
+      'X-Accel-Buffering': 'no',
       Connection: 'keep-alive',
-      'Access-Control-Allow-Origin': '*',
     })
+    // The reconnect hint. The official server leaves the retry interval to
+    // the client; the hint is harmless for the 2.x client, which reads the
+    // first *event* of the stream.
     res.write('retry: 3000\n\n')
-    const sessionFilter = (req.params as Record<string, string | undefined>).sessionID
-      ?? req.query.get('sessionID')
+    const sessionFilter = (req.params as Record<string, string | undefined>).sessionID      ?? req.query.get('sessionID')
       ?? undefined
     const client = hub.add(res, (event) => {
       if (sessionFilter === undefined) return true
       const eventSession = (event.payload.properties as Record<string, unknown> | undefined)?.sessionID
       return eventSession === sessionFilter
     })
+    // The 2.x client refuses a stream that does not open with
+    // `server.connected`, so it is always the first frame.
+    hub.send(client, makeEvent(cwd, 'server.connected', {}))
     const rawLastEventId = req.headers['last-event-id']
     const lastEventId = Array.isArray(rawLastEventId) ? rawLastEventId[0] : rawLastEventId
     if (lastEventId !== undefined && lastEventId.length > 0) {
@@ -2599,7 +2756,13 @@ export function createBridgeRouter(
         replayGuard,
         sharedState,
         onFlush: (events) => {
-          hub.broadcast(events)
+          broadcastEvents(events)
+        },
+        // The OpenCode 2.x vocabulary is a channel of its own: the 1.18.18
+        // TUI stream keeps its event names, the 2.x clients read the flat
+        // envelope of the same SSE connection.
+        onV2Event: (event) => {
+          broadcastEvents([event])
         },
       })
       translator = instance
@@ -2734,11 +2897,24 @@ export function createBridgeRouter(
 
   /** Replay the authoritative status edge missed while an SSE client was away. */
   function replaySessionStatusSnapshot(client: SseClient): void {
-    for (const [sessionId, running] of state.sessionRunning) {
+    // The official opencode server reports a session's status when it
+    // changes, so a client that reconnects learns which sessions are busy
+    // and treats the rest as idle. Reporting every session the bridge has
+    // ever seen made the OpenCode web UI read hundreds of session records
+    // on every connect and never finish its initial load, so the snapshot
+    // is bounded to the sessions that are running plus the most recently
+    // touched ones.
+    const running = [...state.sessionRunning].filter(([, value]) => value)
+    const recent = [...state.sessionRunning]
+      .filter(([, value]) => !value)
+      .sort((a, b) => (state.sessionStatusUpdatedAt.get(b[0]) ?? 0) - (state.sessionStatusUpdatedAt.get(a[0]) ?? 0))
+      .slice(0, Math.max(0, SESSION_STATUS_SNAPSHOT_LIMIT - running.length))
+    for (const [sessionId] of [...running, ...recent]) {
+      const isRunning = state.sessionRunning.get(sessionId) === true
       const directory = state.sessionDirectories.get(sessionId) ?? cwd
       hub.send(client, makeEvent(directory, 'session.status', {
         sessionID: sessionId,
-        status: { type: running ? 'busy' : 'idle' },
+        status: { type: isRunning ? 'busy' : 'idle' },
       }, projectIdFor(directory)))
     }
   }
@@ -2848,6 +3024,10 @@ export function createBridgeRouter(
     startSse,
     feed,
     feedHostFrame,
+    serveWebUi(req: BridgeRequest, res: ServerResponse): boolean {
+      if (options.webUiDir === undefined) return false
+      return serveWebUiFile(res, options.webUiDir, req.pathname, req.method)
+    },
     setCwd(directory: string) {
       cwd = directory
       ctx.cwd = directory

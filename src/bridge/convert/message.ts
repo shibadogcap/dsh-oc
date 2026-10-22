@@ -8,21 +8,36 @@ import type {
 } from '@deepseek-ai/dsh-llm/types'
 import type { AssistantStreamRecord } from '@deepseek-ai/dsh-llm/assistant-stream'
 import type {
-  AssistantMessage,
-  Message,
-  Part,
-  TextPart,
-  UserMessage,
-} from '@opencode-ai/sdk/client'
-import type {
+  JsonValue,
   ModelRef,
-  SessionMessage,
-  SessionMessageAssistant,
-  SessionMessageAssistantReasoning,
-  SessionMessageAssistantText,
-  SessionMessageAssistantTool,
-  SessionMessageUser,
-} from '@opencode-ai/sdk/v2/types'
+  SessionMessageAssistant as ClientSessionMessageAssistant,
+  SessionMessageAssistantReasoning as ClientSessionMessageAssistantReasoning,
+  SessionMessageAssistantText as ClientSessionMessageAssistantText,
+  SessionMessageAssistantTool as ClientSessionMessageAssistantTool,
+  SessionMessageInfo,
+  SessionMessageUser as ClientSessionMessageUser,
+  ToolContent,
+} from '@opencode/client'
+import type {
+  WireCompactionPart,
+  WireMessageEntry,
+  WireMessageInfo,
+  WirePart,
+  WireTextPart,
+} from './wire.js'
+
+// Local widened aliases built on top of @opencode/client types so the
+// v2 converter can keep carrying the extra fields (part ids, pending tool
+// state, structured metadata) that the dsh bridge relies on. These remain
+// assignable to the client wire types used at the route boundary.
+type SessionMessageUser = ClientSessionMessageUser
+type SessionMessageAssistantText = ClientSessionMessageAssistantText & { id?: string }
+type SessionMessageAssistantReasoning = ClientSessionMessageAssistantReasoning & { id?: string }
+type SessionMessageAssistantTool = ClientSessionMessageAssistantTool
+type SessionMessageAssistant = Omit<ClientSessionMessageAssistant, 'content'> & {
+  content: Array<SessionMessageAssistantText | SessionMessageAssistantReasoning | SessionMessageAssistantTool>
+}
+type SessionMessage = SessionMessageUser | SessionMessageAssistant
 import {
   DEFAULT_AGENT,
   externalProviderId,
@@ -32,15 +47,12 @@ import {
   textFromBlocks,
 } from './common.js'
 import {
-  completedToolPart,
-  errorToolPart,
   normalizedToolInput,
   pendingToolPart,
   opencodeToolName,
   subagentMetadataForCall,
   type ToolCallInfo,
   type SubagentToolMetadata,
-  type ToolResultInfo,
 } from './tool.js'
 import { goalChangeText } from './goal.js'
 
@@ -56,11 +68,6 @@ export interface MessageConvertOptions {
   onSkip?: (eventType: string, reason: string) => void
   /** Resolve a dsh delegation's child id from the parent session catalog. */
   subagentForCall?: (call: ToolCallInfo) => SubagentToolMetadata | undefined
-}
-
-export interface V1MessageEntry {
-  info: Message
-  parts: Part[]
 }
 
 /**
@@ -146,7 +153,7 @@ function compactionPart(
   messageId: string,
   opts: MessageConvertOptions,
   auto: boolean,
-): Part {
+): WireCompactionPart {
   return {
     id: `${messageId}:compaction`,
     sessionID: opts.sessionId,
@@ -176,10 +183,11 @@ function usageTokens(usage?: TokenUsage) {
   }
 }
 
-function userMessageInfo(id: string, time: number, opts: MessageConvertOptions): UserMessage {
+function userMessageInfo(id: string, time: number, opts: MessageConvertOptions): WireMessageInfo {
   const selected = opts.defaultModel ?? { providerID: 'deepseek', modelID: 'deepseek-chat' }
-  // The v1 SDK type predates OpenCode's variant field on UserMessage, but the
-  // 1.18.18 TUI reads this extra field when restoring the active model.
+  // The 1.18.18 TUI reads the `variant` field of a user card when restoring
+  // the active model, so the bridge keeps carrying it next to the provider
+  // and model ids.
   const model = {
     providerID: selected.providerID,
     modelID: selected.modelID,
@@ -191,7 +199,7 @@ function userMessageInfo(id: string, time: number, opts: MessageConvertOptions):
     role: 'user',
     time: { created: time },
     agent: DEFAULT_AGENT,
-    model: model as UserMessage['model'],
+    model,
   }
 }
 
@@ -203,7 +211,7 @@ function assistantMessageInfo(
   usage?: TokenUsage,
   created?: number,
   finish?: string,
-): AssistantMessage & { agent: string } {
+): WireMessageInfo {
   return {
     id: String(message.id),
     sessionID: opts.sessionId,
@@ -227,7 +235,7 @@ function textPart(
   text: string,
   time: { start: number; end?: number },
   opts: MessageConvertOptions,
-): TextPart {
+): WireTextPart {
   return {
     id,
     sessionID: opts.sessionId,
@@ -238,7 +246,7 @@ function textPart(
   }
 }
 
-/** Build the v1 text/reasoning/tool parts for one assistant message. */
+/** Build the SSE text/reasoning/tool parts for one assistant message. */
 export function assistantPartsFromMessage(
   message: DshAssistantMessage,
   time: number,
@@ -246,8 +254,8 @@ export function assistantPartsFromMessage(
   blockStart?: (index: number, blockType: string) => number | undefined,
   blockEnd?: (index: number, blockType: string) => number | undefined,
   partIdFor?: (index: number, blockType: string) => string | undefined,
-): { parts: Part[]; calls: Map<string, ToolCallInfo> } {
-  const parts: Part[] = []
+): { parts: WirePart[]; calls: Map<string, ToolCallInfo> } {
+  const parts: WirePart[] = []
   const calls = new Map<string, ToolCallInfo>()
   const messageID = String(message.id)
   message.content.forEach((block, index) => {
@@ -291,8 +299,8 @@ function userPartsFromMessage(
   content: readonly ContentBlock[],
   time: number,
   opts: MessageConvertOptions,
-): Part[] {
-  const parts: Part[] = []
+): WirePart[] {
+  const parts: WirePart[] = []
   content.forEach((block, index) => {
     if (block.type === 'text') {
       parts.push(textPart(`${messageId}:${index}`, messageId, block.text, { start: time, end: time }, opts))
@@ -355,346 +363,11 @@ function accumulateStreamBlock(
   }
 }
 
-function partialAssistantMessageInfo(
-  id: string,
-  created: number,
-  parentID: string,
-  opts: MessageConvertOptions,
-): AssistantMessage {
-  const model = opts.defaultModel ?? { providerID: 'deepseek', modelID: 'deepseek-chat' }
-  return {
-    id,
-    sessionID: opts.sessionId,
-    role: 'assistant',
-    time: { created },
-    parentID,
-    modelID: model.modelID,
-    providerID: model.providerID,
-    mode: DEFAULT_AGENT,
-    path: { cwd: opts.cwd, root: opts.cwd },
-    cost: 0,
-    tokens: ZERO_TOKENS,
-  }
-}
-
-function v1StreamPart(
-  block: StreamBlockAccumulator,
-  messageID: string,
-  partId: string,
-  opts: MessageConvertOptions,
-): Part {
-  if (block.blockType === 'text') {
-    return textPart(partId, messageID, block.text, { start: block.start }, opts)
-  }
-  return {
-    id: partId,
-    sessionID: opts.sessionId,
-    messageID,
-    type: 'reasoning',
-    text: block.text,
-    time: { start: block.start },
-  }
-}
-
-function upsertPartialV1(
-  entries: V1MessageEntry[],
-  pending: Map<string, V1MessageEntry>,
-  blocksByStep: StreamBlocksByStep,
-  pendingCallsByStep: Map<string, Map<string, ToolCallInfo>>,
-  opts: MessageConvertOptions,
-  turn: number,
-  step: number,
-  created: number,
-  parentID: string,
-): V1MessageEntry {
-  const stepKey = `${turn}:${step}`
-  let entry = pending.get(stepKey)
-  if (!entry) {
-    entry = {
-      info: partialAssistantMessageInfo(
-        provisionalMessageId(opts.sessionId, turn, step),
-        created,
-        parentID,
-        opts,
-      ),
-      parts: [],
-    }
-    pending.set(stepKey, entry)
-    entries.push(entry)
-  }
-  const blocks = blocksByStep.get(stepKey)
-  if (blocks) {
-    for (const [blockKey, block] of blocks) {
-      const blockIndex = Number(blockKey.slice(0, blockKey.indexOf(':')))
-      const partId = provisionalPartId(opts.sessionId, turn, step, block.blockType, blockIndex)
-      const partIndex = entry.parts.findIndex((part) => part.id === partId)
-      const replacement = v1StreamPart(block, entry.info.id, partId, opts)
-      if (partIndex === -1) {
-        entry.parts.push(replacement)
-      } else {
-        entry.parts[partIndex] = replacement
-      }
-    }
-  }
-  const calls = pendingCallsByStep.get(stepKey)
-  if (calls) {
-    for (const call of calls.values()) {
-      if (!entry.parts.some((part) => part.type === 'tool' && part.callID === call.callId)) {
-        entry.parts.push(pendingToolPart(call, {
-          sessionID: opts.sessionId,
-          messageID: entry.info.id,
-          time: created,
-        }))
-      }
-    }
-  }
-  return entry
-}
-
-function applyToolResultV1(
-  entries: V1MessageEntry[],
-  calls: Map<string, ToolCallInfo>,
-  event: SessionEvent<'tool/result'>,
-  opts: MessageConvertOptions,
-  view?: ToolEventView,
-): void {
-  const data = event.data
-  const callId = String(data.message.content[0]?.toolCallId ?? data.message.source.callId)
-  const call = calls.get(callId)
-  if (!call) {
-    opts.onSkip?.('tool/result', `no matching tool/call for "${callId}"`)
-    return
-  }
-  const result: ToolResultInfo = {
-    callId,
-    content: data.message.content,
-    error: data.error,
-    time: event.time,
-    meta: data.meta,
-    view,
-    callView: call.view,
-  }
-  for (let i = entries.length - 1; i >= 0; i--) {
-    const entry = entries[i] as V1MessageEntry
-    if (entry.info.role !== 'assistant') continue
-    const index = entry.parts.findIndex((part) => part.type === 'tool' && part.callID === callId)
-    if (index === -1) continue
-    const replacement = data.error === undefined
-      ? completedToolPart(call, result, {
-          sessionID: opts.sessionId,
-          messageID: entry.info.id,
-          time: event.time,
-        })
-      : errorToolPart(call, result, {
-          sessionID: opts.sessionId,
-          messageID: entry.info.id,
-          time: event.time,
-        })
-    entry.parts[index] = replacement
-    return
-  }
-  opts.onSkip?.('tool/result', `no assistant message holds "${callId}"`)
-}
-
-/** Fold dsh history events into the v1 `{ info, parts }` message list. */
-export function convertMessagesV1(
-  events: readonly BridgeEvent[],
-  opts: MessageConvertOptions,
-  views?: ReadonlyArray<ToolEventView | undefined>,
-): V1MessageEntry[] {
-  const entries: V1MessageEntry[] = []
-  const calls = new Map<string, ToolCallInfo>()
-  const blockStarts = new Map<string, number>()
-  const turnStarts = new Map<number, number>()
-  const finishReasons = new Map<string, string>()
-  const blockEnds = new Map<string, number>()
-  const blocksByStep: StreamBlocksByStep = new Map()
-  const pending = new Map<string, V1MessageEntry>()
-  const pendingCallsByStep = new Map<string, Map<string, ToolCallInfo>>()
-  let lastMessageId = ''
-  // `turn/start` is deliberately emitted before the durable user/message in
-  // dsh 0.1.2.  When a reply has no streamed chunks, falling back to the
-  // turn-start timestamp would therefore make the assistant's
-  // `time.created` earlier than its parent user card.  OpenCode keys live and
-  // hydrated messages by that timestamp, so keep the fallback monotonic with
-  // the visible user transcript.
-  let lastUserMessageTime: number | undefined
-
-  for (let eventIndex = 0; eventIndex < events.length; eventIndex++) {
-    const event = events[eventIndex] as BridgeEvent
-    const view = views?.[eventIndex]
-    switch (event.type) {
-      case 'turn/start': {
-        turnStarts.set(event.data.turn, event.time)
-        break
-      }
-      case 'user/message': {
-        const data = event.data
-        const id = String(data.id)
-        const compact = isCompactCheckpoint(event)
-        const sourceKind = (data.source as { kind?: string } | undefined)?.kind
-        if (sourceKind !== 'user' && !compact) {
-          // Plugin/system rows (dcp boundary markers, runtime-context
-          // snapshots, subagent-settled notices, goal rounds) are not part of
-          // the user transcript surface. The live SSE stream already hides
-          // them; history must stay consistent so a resume does not render
-          // phantom user cards.
-          break
-        }
-        entries.push({
-          info: userMessageInfo(id, event.time, opts),
-          parts: compact
-            ? [compactionPart(id, opts, isAutoCompactCheckpoint(event))]
-            : userPartsFromMessage(id, data.content, event.time, opts),
-        })
-        lastMessageId = id
-        lastUserMessageTime = event.time
-        break
-      }
-      case 'text-chunks':
-      case 'reasoning-chunks': {
-        const chunk = event as unknown as StreamChunkRowEvent
-        const blockType = chunk.type === 'text-chunks' ? 'text' : 'reasoning'
-        const key = `${chunk.data.turn}:${chunk.data.step}:${chunk.data.index}:${blockType}`
-        const time0 = chunk.time0 ?? chunk.time
-        if (!blockStarts.has(key)) {
-          blockStarts.set(key, time0)
-        }
-        blockEnds.set(key, event.time)
-        const start = blockStarts.get(key) ?? time0
-        accumulateStreamBlock(
-          blocksByStep,
-          chunk.data.turn,
-          chunk.data.step,
-          chunk.data.index,
-          blockType,
-          chunk.data.texts.join(''),
-          start,
-        )
-        const created = Math.max(
-          earliestBlockStart(blockStarts, chunk.data.turn, chunk.data.step) ?? turnStarts.get(chunk.data.turn) ?? time0,
-          lastUserMessageTime === undefined ? Number.MIN_SAFE_INTEGER : lastUserMessageTime + 1,
-        )
-        upsertPartialV1(
-          entries,
-          pending,
-          blocksByStep,
-          pendingCallsByStep,
-          opts,
-          chunk.data.turn,
-          chunk.data.step,
-          created,
-          lastMessageId || `pending:${opts.sessionId}:user`,
-        )
-        break
-      }
-      case 'assistant/message': {
-        const data = event.data
-        const id = String(data.message.id)
-        const stepKey = `${data.turn}:${data.step}`
-        const timing = assistantStreamTiming(data.stream, data.turn, data.step)
-        for (const [key, time] of timing.starts) blockStarts.set(key, time)
-        for (const [key, time] of timing.ends) blockEnds.set(key, time)
-        if (timing.finish !== undefined) finishReasons.set(stepKey, timing.finish)
-        const { parts, calls: messageCalls } = assistantPartsFromMessage(
-          data.message,
-          event.time,
-          opts,
-          (index, blockType) => blockStarts.get(`${data.turn}:${data.step}:${index}:${blockType}`),
-          (index, blockType) => blockEnds.get(`${data.turn}:${data.step}:${index}:${blockType}`),
-          (index, blockType) => provisionalPartId(opts.sessionId, data.turn, data.step, blockType, index),
-        )
-        for (const [callId, call] of messageCalls) calls.set(callId, call)
-        const pendingEntry = pending.get(stepKey)
-        const pendingIndex = pendingEntry === undefined
-          ? -1
-          : entries.findIndex((entry) => entry.info.id === pendingEntry.info.id)
-        const created = Math.max(
-          earliestBlockStart(blockStarts, data.turn, data.step) ?? turnStarts.get(data.turn) ?? event.time,
-          lastUserMessageTime === undefined ? Number.MIN_SAFE_INTEGER : lastUserMessageTime + 1,
-        )
-        entries.push({
-          info: assistantMessageInfo(
-            data.message,
-            event.time,
-            lastMessageId || id,
-            opts,
-            data.usage,
-            created,
-            finishReasons.get(`${data.turn}:${data.step}`) ?? 'stop',
-          ),
-          parts,
-        })
-        if (pendingIndex !== -1) entries.splice(pendingIndex, 1)
-        pending.delete(stepKey)
-        pendingCallsByStep.delete(stepKey)
-        lastMessageId = id
-        break
-      }
-      case 'tool/call': {
-        const data = event.data
-        let call: ToolCallInfo = {
-          callId: String(data.callId),
-          name: data.name,
-          arguments: data.arguments,
-          ...(view === undefined ? {} : { view }),
-        }
-        const subagent = opts.subagentForCall?.(call)
-        if (subagent !== undefined) call = { ...call, subagent }
-        calls.set(call.callId, call)
-        const stepKey = `${data.turn}:${data.step}`
-        let stepCalls = pendingCallsByStep.get(stepKey)
-        if (!stepCalls) {
-          stepCalls = new Map()
-          pendingCallsByStep.set(stepKey, stepCalls)
-        }
-        stepCalls.set(call.callId, call)
-        const pendingEntry = pending.get(stepKey)
-        if (
-          pendingEntry
-          && !pendingEntry.parts.some((part) => part.type === 'tool' && part.callID === call.callId)
-        ) {
-          pendingEntry.parts.push(pendingToolPart(call, {
-            sessionID: opts.sessionId,
-            messageID: pendingEntry.info.id,
-            time: event.time,
-          }))
-        }
-        break
-      }
-      case 'tool/result': {
-        applyToolResultV1(entries, calls, event, opts, view)
-        break
-      }
-      default:
-        // Log-only events (turn/start, request/header, ...) are not part of
-        // the message surface; goal changes become concise assistant notes.
-        if (event.type === 'goal/change') {
-          const text = goalChangeText((event as unknown as { data: unknown }).data)
-          if (text !== undefined) {
-            const id = `goal:${event.seq}`
-            entries.push({
-              info: partialAssistantMessageInfo(
-                id,
-                event.time,
-                lastMessageId || `pending:${opts.sessionId}:user`,
-                opts,
-              ),
-              parts: [textPart(`${id}:note`, id, text, { start: event.time, end: event.time }, opts)],
-            })
-          }
-        }
-        break
-    }
-  }
-  return entries
-}
-
-/** Single-event v1 conversion used by the SSE bridge. */
+/** Single-event conversion used by the SSE bridge. */
 export function userMessageFromEvent(
   event: SessionEvent<'user/message'>,
   opts: MessageConvertOptions,
-): V1MessageEntry {
+): WireMessageEntry {
   const id = String(event.data.id)
   return {
     info: userMessageInfo(id, event.time, opts),
@@ -704,7 +377,7 @@ export function userMessageFromEvent(
   }
 }
 
-/** Single-event v1 conversion used by the SSE bridge. */
+/** Single-event conversion used by the SSE bridge. */
 export function assistantMessageFromEvent(
   event: SessionEvent<'assistant/message'>,
   opts: MessageConvertOptions,
@@ -714,7 +387,7 @@ export function assistantMessageFromEvent(
   parentID?: string,
   finish?: string,
   partIdFor?: (index: number, blockType: string) => string | undefined,
-): V1MessageEntry {
+): WireMessageEntry {
   const id = String(event.data.message.id)
   const effectivePartIdFor = partIdFor ?? ((index: number, blockType: string) =>
     provisionalPartId(opts.sessionId, event.data.turn, event.data.step, blockType, index))
@@ -798,7 +471,7 @@ function upsertPartialV2(
       const blockIndex = Number(blockKey.slice(0, blockKey.indexOf(':')))
       const partId = provisionalPartId(opts.sessionId, turn, step, block.blockType, blockIndex)
       const replacement = v2StreamPart(block, partId)
-      const partIndex = info.content.findIndex((part) => part.id === partId)
+      const partIndex = info.content.findIndex((part) => (part as any).id === partId)
       if (partIndex === -1) {
         info.content.push(replacement)
       } else {
@@ -813,7 +486,7 @@ function upsertPartialV2(
         type: 'tool',
         id: `tool:${call.callId}`,
         name: opencodeToolName(call.name, safeJsonParse(call.arguments)),
-        state: { status: 'pending', input: call.arguments },
+        state: { status: 'streaming', input: call.arguments },
         time: { created },
       }
       info.content.push(tool)
@@ -868,7 +541,7 @@ function toV2Assistant(
         type: 'tool',
         id: `tool:${call.callId}`,
         name: opencodeToolName(call.name, safeJsonParse(call.arguments)),
-        state: { status: 'pending', input: call.arguments },
+        state: { status: 'streaming', input: call.arguments },
         time: { created: event.time },
       }
       content.push(tool)
@@ -897,17 +570,15 @@ function applyToolResultV2(
   opts: MessageConvertOptions,
 ): void {
   const data = event.data
-  const callId = String(data.message.content[0]?.toolCallId ?? data.message.source.callId)
+  const callId = String((data.message as { toolCallId?: unknown }).toolCallId ?? data.message.source.callId)
   const call = calls.get(callId)
   if (!call || !state) {
     opts.onSkip?.('tool/result', `no matching v2 tool/call for "${callId}"`)
     return
   }
-  const blocks = data.message.content.flatMap((block) =>
-    block.type === 'tool-result' ? block.content : [block],
-  )
+  const blocks = data.message.content
   const text = textFromBlocks(blocks as readonly { type: string; text?: unknown }[])
-  const content = text.length === 0 ? [] : [{ type: 'text' as const, text }]
+  const content: Array<{ type: 'text'; text: string }> = [{ type: 'text' as const, text }]
   const tool = state.info.content.find(
     (part): part is SessionMessageAssistantTool => part.type === 'tool' && part.id === `tool:${callId}`,
   )
@@ -915,21 +586,23 @@ function applyToolResultV2(
     opts.onSkip?.('tool/result', `no v2 tool part for "${callId}"`)
     return
   }
+  const metadata = subagentMetadataForCall(call) as { [x: string]: JsonValue }
   if (data.error !== undefined) {
     tool.state = {
       status: 'error',
-      input: normalizedToolInput(call.name, safeJsonParse(call.arguments)),
-      content: [],
-      structured: subagentMetadataForCall(call),
+      input: normalizedToolInput(call.name, safeJsonParse(call.arguments)) as { [x: string]: JsonValue },
+      ...(text.length > 0
+        ? { content: [{ type: 'text' as const, text }] as [ToolContent, ...Array<ToolContent>] }
+        : {}),
+      metadata,
       error: { type: 'unknown', message: data.error.name ?? data.error.code ?? 'tool failed' },
     }
   } else {
     tool.state = {
       status: 'completed',
-      input: normalizedToolInput(call.name, safeJsonParse(call.arguments)),
-      content,
-      structured: subagentMetadataForCall(call),
-      result: undefined,
+      input: normalizedToolInput(call.name, safeJsonParse(call.arguments)) as { [x: string]: JsonValue },
+      content: content as [ToolContent, ...Array<ToolContent>],
+      metadata,
     }
   }
   tool.time = { ...tool.time, completed: event.time }
@@ -1090,7 +763,7 @@ export function convertMessagesV2(
             type: 'tool',
             id: `tool:${call.callId}`,
             name: opencodeToolName(call.name, safeJsonParse(call.arguments)),
-            state: { status: 'pending', input: call.arguments },
+            state: { status: 'streaming', input: call.arguments },
             time: { created: event.time },
           })
         }
@@ -1116,10 +789,10 @@ export function convertMessagesV2(
                 id: model.modelID,
                 providerID: model.providerID,
               },
-              content: [{ type: 'text', id: `${id}:note`, text }],
+              content: [{ type: 'text', id: `${id}:note`, text } as SessionMessageAssistantText],
               cost: 0,
               tokens: ZERO_TOKENS,
-            }, event.seq)
+            } as SessionMessage, event.seq)
           }
         }
         break

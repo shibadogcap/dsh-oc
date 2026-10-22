@@ -36,10 +36,15 @@ fi
 SCRIPT_START=$SECONDS
 E2E_RUNID=""
 E2E_ACTIVE_SESSION=""
+SSE_PID=""
 
 cleanup() {
   local code=$?
   tmux kill-session -t "$E2E_TUI_SESSION" 2>/dev/null || true
+  if [[ -n "$SSE_PID" ]]; then
+    kill "$SSE_PID" 2>/dev/null || true
+    wait "$SSE_PID" 2>/dev/null || true
+  fi
   if [[ -n "$E2E_ACTIVE_SESSION" ]]; then
     e2e_stop_dsh "$E2E_ACTIVE_SESSION" || true
   fi
@@ -93,22 +98,21 @@ wait_ready() {
 wait_idle() {
   local deadline=$((SECONDS + 300))
   while (( SECONDS < deadline )); do
-    local st
-    st="$(curl -s -m 5 "$E2E_BRIDGE_URL/session/status" \
-      | jq -r --arg s "$SID" '.[$s].type // "idle"' 2>/dev/null || echo busy)"
-    if [[ "$st" == "idle" ]]; then return 0; fi
+    local code
+    code="$(curl -s -m 40 -o /dev/null -w '%{http_code}' -X POST "$E2E_BRIDGE_URL/api/session/$SID/wait")"
+    if [[ "$code" == "204" ]]; then return 0; fi
     sleep 2
   done
   return 1
 }
 
 user_count() {
-  curl -s -m 5 "$E2E_BRIDGE_URL/session/$SID/message" \
-    | jq '[.[] | select(.info.role == "user")] | length' 2>/dev/null || echo 0
+  curl -s -m 5 "$E2E_BRIDGE_URL/api/session/$SID/message" \
+    | jq '[.data[] | select(.type == "user")] | length' 2>/dev/null || echo 0
 }
 
 tool_part_count() {
-  curl -s -m 5 "$E2E_BRIDGE_URL/session/$SID/message" \
+  curl -s -m 5 "$E2E_BRIDGE_URL/api/session/$SID/message" \
     | jq '[.. | objects | select(.type == "tool")] | length' 2>/dev/null || echo 0
 }
 
@@ -117,11 +121,16 @@ E2E_ACTIVE_SESSION="dsh-oc-real-llm-seed"
 e2e_start_dsh "$E2E_ACTIVE_SESSION"
 e2e_wait_bridge_url
 B="$E2E_BRIDGE_URL"
-SID="$(curl -s -X POST "$B/session" -H 'Content-Type: application/json' -d '{}' | jq -er .id)"
+SID="$(curl -s -X POST "$B/api/session" -H 'Content-Type: application/json' -d '{}' | jq -er .data.id)"
 echo "  session $SID"
 
+# The v2 surface publishes the merged goal/todo list over SSE; keep the
+# stream open so the goal assertions can read it.
+curl -sN --max-time 900 "$B/api/event" > "$E2E_RUN_DIR/real-llm-sse.txt" 2>/dev/null &
+SSE_PID=$!
+
 echo "== task 1: text + tool call =="
-curl -s -X POST "$B/session/$SID/message" -H 'Content-Type: application/json' \
+curl -s -X POST "$B/api/session/$SID/prompt" -H 'Content-Type: application/json' \
   -d '{"parts":[{"type":"text","text":"用 bash 运行 ls 列出当前目录前 5 项，然后用一句话总结 README.md 的第一行。"}]}' >/dev/null
 wait_idle
 COUNT="$(user_count)"
@@ -138,10 +147,10 @@ fi
 
 if [[ "$QUICK" != "1" ]]; then
   echo "== queue probe: send '继续' while idle, then immediately a slow task =="
-  curl -s -X POST "$B/session/$SID/message" -H 'Content-Type: application/json' \
+  curl -s -X POST "$B/api/session/$SID/prompt" -H 'Content-Type: application/json' \
     -d '{"parts":[{"type":"text","text":"继续"}]}' >/dev/null
   sleep 1
-  curl -s -X POST "$B/session/$SID/message" -H 'Content-Type: application/json' \
+  curl -s -X POST "$B/api/session/$SID/prompt" -H 'Content-Type: application/json' \
     -d '{"parts":[{"type":"text","text":"只回复两个字：完成"}]}' >/dev/null
   wait_idle
   COUNT="$(user_count)"
@@ -149,19 +158,19 @@ if [[ "$QUICK" != "1" ]]; then
     echo "e2e: queue probe expected 3 user messages, got $COUNT" >&2
     exit 1
   fi
-  if ! curl -s "$B/session/$SID/message" | jq -e '
-      ([.[] | select(.info.role == "user") | .parts[]?
-        | select(.type == "text") | .text] | map(select(contains("继续") or contains("只回复两个字：完成")))) as $prompts |
+  if ! curl -s "$B/api/session/$SID/message" | jq -e '
+      ([.data[] | select(.type == "user") | .text]
+        | map(select(contains("继续") or contains("只回复两个字：完成")))) as $prompts |
       any($prompts[]; contains("继续"))
       and any($prompts[]; contains("只回复两个字：完成"))
       and (($prompts[-1] // "") | contains("只回复两个字：完成"))
-      and ([.[] | select(.info.role == "assistant") | .parts[]?
+      and ([.data[] | select(.type == "assistant") | .content[]?
             | select(.type == "text") | .text] | last | contains("完成"))
     ' >/dev/null; then
     echo "e2e: queue probe FIFO/content assertion failed" >&2
-    curl -s "$B/session/$SID/message" | jq -r '
-      .[] | select(.info.role == "user" or .info.role == "assistant")
-      | "\(.info.role): \([.parts[]? | select(.type == "text") | .text] | join(""))"' \
+    curl -s "$B/api/session/$SID/message" | jq -r '
+      .data[] | select(.type == "user" or .type == "assistant")
+      | "\(.type): \([.content[]? | select(.type == "text") | .text] | join(""))"' \
       | tail -8 >&2 || true
     exit 1
   fi
@@ -173,13 +182,13 @@ echo "== goal + variant =="
 # asking the model to call create_goal itself: real-model behavior varies
 # and a model that merely narrates instead of invoking the tool stalls the
 # probe. The model-driven create_goal path is still covered by e2e-api-goal.sh.
-curl -s -X POST "$B/session/$SID/command" -H 'Content-Type: application/json' \
-  -d '{"command":"goal","arguments":"验证 dsh-oc 真实 LLM 集成"}' >/dev/null
+curl -s -X POST "$B/api/session/$SID/command" -H 'Content-Type: application/json' \
+  -d '{"name":"goal","text":"验证 dsh-oc 真实 LLM 集成"}' >/dev/null
 GOAL_OK=""
 deadline=$((SECONDS + 90))
 while (( SECONDS < deadline )); do
-  TODO="$(curl -s "$B/session/$SID/todo")"
-  if jq -e --arg g 'Goal: 验证 dsh-oc 真实 LLM 集成' 'any(.[]; .content == $g)' <<<"$TODO" >/dev/null 2>&1; then
+  # The v2 surface publishes the merged goal/todo list over SSE.
+  if grep -qa '验证 dsh-oc 真实 LLM 集成' "$E2E_RUN_DIR/real-llm-sse.txt" 2>/dev/null; then
     GOAL_OK=1
     break
   fi
@@ -187,10 +196,10 @@ while (( SECONDS < deadline )); do
 done
 if [[ -z "$GOAL_OK" ]]; then
   echo "e2e: goal not created within 90s" >&2
-  curl -s "$B/session/$SID/message" | jq -r '.[] | select(.info.role=="assistant") | (.parts[]?.text // "")' | tail -5 >&2 || true
+  curl -s "$B/api/session/$SID/message" | jq -r '.data[] | select(.type=="assistant") | (.content[]?.text // "")' | tail -5 >&2 || true
   exit 1
 fi
-echo "  goal visible in /todo"
+echo "  goal visible in the SSE todo stream"
 MODEL="$(curl -s "$B/api/session/$SID" | jq -c '.data.model')"
 echo "  session model: $MODEL"
 echo "$MODEL" | jq -e '.variant != null' >/dev/null
@@ -231,8 +240,8 @@ echo "  goal visible in sidebar"
 
 tmux send-keys -t "$E2E_TUI_SESSION" '继续' Enter
 BEFORE_USERS="$(user_count)"
-BEFORE_ASSISTANTS="$(curl -s -m 5 "$B/session/$SID/message" \
-  | jq '[.[] | select(.info.role == "assistant")] | length' 2>/dev/null || echo 0)"
+BEFORE_ASSISTANTS="$(curl -s -m 5 "$B/api/session/$SID/message" \
+  | jq '[.data[] | select(.type == "assistant")] | length' 2>/dev/null || echo 0)"
 echo "  waiting for TUI prompt delivery (before=$BEFORE_USERS)..."
 DELIVERED=""
 deadline=$((SECONDS + 180))
@@ -252,18 +261,17 @@ fi
 echo "  TUI prompt delivered; waiting for reply idle..."
 wait_idle
 echo "  TUI reply idle"
-NOW_ASSISTANTS="$(curl -s "$B/session/$SID/message" | jq '[.[] | select(.info.role == "assistant")] | length')"
+NOW_ASSISTANTS="$(curl -s "$B/api/session/$SID/message" | jq '[.data[] | select(.type == "assistant")] | length')"
 e2e_tui_capture "$E2E_RUN_DIR/tui-continue.txt" || true
 # Assert exactly-once delivery and that a reply followed the submitted prompt.
-if ! curl -s "$B/session/$SID/message" | jq -e --argjson before "$BEFORE_USERS" --argjson asstBefore "$BEFORE_ASSISTANTS" '
-    ([.[] | select(.info.role == "user")] | length) == ($before + 1)
-    and (([.[] | select(.info.role == "user") | .parts[]?
-          | select(.type == "text") | .text] | last) | contains("继续"))
-    and ([.[] | select(.info.role == "assistant")] | length) >= ($asstBefore + 1)
+if ! curl -s "$B/api/session/$SID/message" | jq -e --argjson before "$BEFORE_USERS" --argjson asstBefore "$BEFORE_ASSISTANTS" \
+    '([.data[] | select(.type == "user")] | length) == ($before + 1)
+    and (([.data[] | select(.type == "user") | .text] | last) | contains("继续"))
+    and ([.data[] | select(.type == "assistant")] | length) >= ($asstBefore + 1)
   ' >/dev/null; then
   echo "e2e: TUI prompt delivery or reply assertion failed" >&2
-  curl -s "$B/session/$SID/message" | jq -r '
-    .[] | select(.info.role == "user") | "user: \([.parts[]? | select(.type == "text") | .text] | join(""))"' \
+  curl -s "$B/api/session/$SID/message" | jq -r '
+    .data[] | select(.type == "user") | "user: \(.text)"' \
     | tail -5 >&2 || true
   exit 1
 fi

@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 
-export const OPENCODE_VERSION = '1.18.18'
+export const OPENCODE_VERSION = '2.1.0'
 export const DEFAULT_AGENT = 'build'
 
 /**

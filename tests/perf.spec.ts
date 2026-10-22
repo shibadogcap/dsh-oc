@@ -97,7 +97,7 @@ describe('perf session generator', () => {
     })
 
     expect(log.header.id).toBe('session-perf-test-1')
-    expect(log.header.version).toBe(3)
+    expect(log.header.version).toBe(4)
     expect(log.header.cwd).toBe('/tmp/perf-work')
     expect(log.header.delegationDepth).toBe(0)
     expect(log.header.agentPreset).toBe('minimal')
@@ -162,7 +162,7 @@ describe('perf session generator', () => {
       const sessionEntries = readdirSync(sessionDir)
       expect(sessionEntries).toHaveLength(6)
       for (const entry of sessionEntries) {
-        expect(existsSync(join(sessionDir, entry, 'session.v3.jsonl.zstd'))).toBe(true)
+        expect(existsSync(join(sessionDir, entry, 'session.v4.jsonl.zstd'))).toBe(true)
       }
     } finally {
       rmSync(dir, { recursive: true, force: true })

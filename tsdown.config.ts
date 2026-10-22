@@ -6,6 +6,7 @@ export default defineConfig({
     'src/bridge/index.ts',
     'src/bridge/file-uploads.ts',
     'src/bridge/router-entry.ts',
+    'src/rewind/index.ts',
     'src/tui/index.ts',
   ],
   outDir: 'lib',

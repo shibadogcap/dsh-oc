@@ -1,69 +1,696 @@
 {
-  "version": "1.18.18",
-  "comment": "Startup + interactive route surface recorded from the 1.18.18 TUI (docs/PROTOCOL.md). Path patterns use :param placeholders; queries are ignored by the probe.",
+  "version": "2.1.0",
+  "comment": "Route surface of the official @opencode/client@2.1.0 (the OpenCode 2.1.0 TUI and API). Path patterns use :param placeholders; queries are ignored by the probe.",
   "routes": [
-    { "method": "GET", "path": "/path", "kind": "json" },
-    { "method": "GET", "path": "/project/current", "kind": "json" },
-    { "method": "GET", "path": "/config/providers", "kind": "json" },
-    { "method": "GET", "path": "/provider", "kind": "json" },
-    { "method": "GET", "path": "/experimental/capabilities", "kind": "json" },
-    { "method": "GET", "path": "/experimental/console", "kind": "json" },
-    { "method": "GET", "path": "/agent", "kind": "json" },
-    { "method": "GET", "path": "/config", "kind": "json" },
-    { "method": "GET", "path": "/global/event", "kind": "sse" },
-    { "method": "GET", "path": "/project/global/directories", "kind": "json" },
-    { "method": "GET", "path": "/session", "kind": "json" },
-    { "method": "GET", "path": "/session/status", "kind": "json" },
-    { "method": "POST", "path": "/session", "kind": "json" },
-    { "method": "GET", "path": "/session/:id", "kind": "json" },
-    { "method": "PATCH", "path": "/session/:id", "kind": "json" },
-    { "method": "GET", "path": "/session/:id/message", "kind": "json" },
-    { "method": "POST", "path": "/session/:id/message", "kind": "json" },
-    { "method": "POST", "path": "/session/:id/prompt", "kind": "json" },
-    { "method": "POST", "path": "/session/:id/prompt_async", "kind": "json" },
-    { "method": "POST", "path": "/session/:id/abort", "kind": "json" },
-    { "method": "POST", "path": "/session/:id/fork", "kind": "json" },
-    { "method": "POST", "path": "/session/:id/summarize", "kind": "json" },
-    { "method": "POST", "path": "/session/:id/compact", "kind": "json" },
-    { "method": "POST", "path": "/session/:id/shell", "kind": "json" },
-    { "method": "POST", "path": "/session/:id/command", "kind": "json" },
-    { "method": "GET", "path": "/session/:id/todo", "kind": "json" },
-    { "method": "GET", "path": "/session/:id/diff", "kind": "json" },
-    { "method": "GET", "path": "/permission", "kind": "json" },
-    { "method": "POST", "path": "/permission/:requestID/reply", "kind": "json" },
-    { "method": "GET", "path": "/question", "kind": "json" },
-    { "method": "POST", "path": "/question/:requestID/reply", "kind": "json" },
-    { "method": "POST", "path": "/question/:requestID/reject", "kind": "json" },
-    { "method": "GET", "path": "/api/location", "kind": "json" },
-    { "method": "GET", "path": "/api/agent", "kind": "json" },
-    { "method": "GET", "path": "/api/integration", "kind": "json" },
-    { "method": "GET", "path": "/api/model", "kind": "json" },
-    { "method": "GET", "path": "/api/provider", "kind": "json" },
-    { "method": "GET", "path": "/api/reference", "kind": "json" },
-    { "method": "GET", "path": "/api/command", "kind": "json" },
-    { "method": "GET", "path": "/api/skill", "kind": "json" },
-    { "method": "GET", "path": "/api/session", "kind": "json" },
-    { "method": "POST", "path": "/api/session", "kind": "json" },
-    { "method": "GET", "path": "/api/session/:sessionID", "kind": "json" },
-    { "method": "GET", "path": "/api/session/:sessionID/message", "kind": "json" },
-    { "method": "POST", "path": "/api/session/:sessionID/prompt", "kind": "json" },
-    { "method": "POST", "path": "/api/session/:sessionID/fork", "kind": "json" },
-    { "method": "POST", "path": "/api/session/:sessionID/compact", "kind": "json" },
-    { "method": "POST", "path": "/api/session/:sessionID/agent", "kind": "json" },
-    { "method": "POST", "path": "/api/session/:sessionID/model", "kind": "json" },
-    { "method": "GET", "path": "/api/session/:sessionID/permission", "kind": "json" },
-    { "method": "POST", "path": "/api/session/:sessionID/permission/:requestID/reply", "kind": "json" },
-    { "method": "GET", "path": "/api/session/:sessionID/question", "kind": "json" },
-    { "method": "POST", "path": "/api/session/:sessionID/question/:requestID/reply", "kind": "json" },
-    { "method": "POST", "path": "/api/session/:sessionID/question/:requestID/reject", "kind": "json" },
-    { "method": "GET", "path": "/api/permission/saved", "kind": "json" },
-    { "method": "GET", "path": "/lsp", "kind": "json" },
-    { "method": "GET", "path": "/mcp", "kind": "json" },
-    { "method": "GET", "path": "/experimental/resource", "kind": "json" },
-    { "method": "GET", "path": "/formatter", "kind": "json" },
-    { "method": "GET", "path": "/provider/auth", "kind": "json" },
-    { "method": "GET", "path": "/vcs", "kind": "json" },
-    { "method": "GET", "path": "/experimental/workspace", "kind": "json" },
-    { "method": "GET", "path": "/experimental/workspace/status", "kind": "json" }
+    {
+      "method": "GET",
+      "path": "/auth/connect/:param",
+      "kind": "json"
+    },
+    {
+      "method": "GET",
+      "path": "/api/location",
+      "kind": "json"
+    },
+    {
+      "method": "POST",
+      "path": "/api/location/reload",
+      "kind": "json"
+    },
+    {
+      "method": "GET",
+      "path": "/api/agent",
+      "kind": "json"
+    },
+    {
+      "method": "GET",
+      "path": "/api/agent/:param",
+      "kind": "json"
+    },
+    {
+      "method": "GET",
+      "path": "/api/plugin",
+      "kind": "json"
+    },
+    {
+      "method": "POST",
+      "path": "/api/plugin/check",
+      "kind": "json"
+    },
+    {
+      "method": "POST",
+      "path": "/api/plugin/update",
+      "kind": "json"
+    },
+    {
+      "method": "GET",
+      "path": "/api/session",
+      "kind": "json"
+    },
+    {
+      "method": "GET",
+      "path": "/api/experimental/session/stats",
+      "kind": "json"
+    },
+    {
+      "method": "POST",
+      "path": "/api/session",
+      "kind": "json"
+    },
+    {
+      "method": "POST",
+      "path": "/api/experimental/session/import",
+      "kind": "json"
+    },
+    {
+      "method": "GET",
+      "path": "/api/experimental/session/:param/export",
+      "kind": "json"
+    },
+    {
+      "method": "GET",
+      "path": "/api/session/active",
+      "kind": "json"
+    },
+    {
+      "method": "GET",
+      "path": "/api/session/:param",
+      "kind": "json"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/session/:param",
+      "kind": "json"
+    },
+    {
+      "method": "POST",
+      "path": "/api/session/:param/fork",
+      "kind": "json"
+    },
+    {
+      "method": "POST",
+      "path": "/api/session/:param/agent",
+      "kind": "json"
+    },
+    {
+      "method": "POST",
+      "path": "/api/session/:param/model",
+      "kind": "json"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/session/:param",
+      "kind": "json"
+    },
+    {
+      "method": "POST",
+      "path": "/api/session/:param/move",
+      "kind": "json"
+    },
+    {
+      "method": "POST",
+      "path": "/api/session/:param/prompt",
+      "kind": "json"
+    },
+    {
+      "method": "POST",
+      "path": "/api/session/:param/command",
+      "kind": "json"
+    },
+    {
+      "method": "POST",
+      "path": "/api/experimental/session/:param/skill",
+      "kind": "json"
+    },
+    {
+      "method": "POST",
+      "path": "/api/session/:param/synthetic",
+      "kind": "json"
+    },
+    {
+      "method": "POST",
+      "path": "/api/session/:param/shell",
+      "kind": "json"
+    },
+    {
+      "method": "POST",
+      "path": "/api/session/:param/compact",
+      "kind": "json"
+    },
+    {
+      "method": "POST",
+      "path": "/api/experimental/session/:param/wait",
+      "kind": "json"
+    },
+    {
+      "method": "POST",
+      "path": "/api/session/:param/revert/stage",
+      "kind": "json"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/session/:param/revert",
+      "kind": "json"
+    },
+    {
+      "method": "POST",
+      "path": "/api/session/:param/revert/commit",
+      "kind": "json"
+    },
+    {
+      "method": "GET",
+      "path": "/api/session/:param/context",
+      "kind": "json"
+    },
+    {
+      "method": "GET",
+      "path": "/api/session/:param/diff",
+      "kind": "json"
+    },
+    {
+      "method": "GET",
+      "path": "/api/session/:param/inbox",
+      "kind": "json"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/session/:param/inbox/:param",
+      "kind": "json"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/session/:param/inbox/:param",
+      "kind": "json"
+    },
+    {
+      "method": "GET",
+      "path": "/api/experimental/session/:param/instructions/entries",
+      "kind": "json"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/experimental/session/:param/instructions/entries/:param",
+      "kind": "json"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/experimental/session/:param/instructions/entries/:param",
+      "kind": "json"
+    },
+    {
+      "method": "POST",
+      "path": "/api/session/:param/generate",
+      "kind": "json"
+    },
+    {
+      "method": "GET",
+      "path": "/api/experimental/session/:param/log",
+      "kind": "sse"
+    },
+    {
+      "method": "POST",
+      "path": "/api/session/:param/interrupt",
+      "kind": "json"
+    },
+    {
+      "method": "POST",
+      "path": "/api/session/:param/background",
+      "kind": "json"
+    },
+    {
+      "method": "GET",
+      "path": "/api/session/:param/message/:param",
+      "kind": "json"
+    },
+    {
+      "method": "GET",
+      "path": "/api/session/:param/form",
+      "kind": "json"
+    },
+    {
+      "method": "POST",
+      "path": "/api/session/:param/form",
+      "kind": "json"
+    },
+    {
+      "method": "GET",
+      "path": "/api/session/:param/form/:param",
+      "kind": "json"
+    },
+    {
+      "method": "POST",
+      "path": "/api/session/:param/form/:param/reply",
+      "kind": "json"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/session/:param/form/:param",
+      "kind": "json"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/session/:param/environment",
+      "kind": "json"
+    },
+    {
+      "method": "POST",
+      "path": "/api/session/:param/view",
+      "kind": "json"
+    },
+    {
+      "method": "GET",
+      "path": "/api/session/:param/message",
+      "kind": "json"
+    },
+    {
+      "method": "GET",
+      "path": "/api/model",
+      "kind": "json"
+    },
+    {
+      "method": "GET",
+      "path": "/api/model/default",
+      "kind": "json"
+    },
+    {
+      "method": "POST",
+      "path": "/api/experimental/generate",
+      "kind": "json"
+    },
+    {
+      "method": "POST",
+      "path": "/api/experimental/voice/session",
+      "kind": "json"
+    },
+    {
+      "method": "GET",
+      "path": "/api/provider",
+      "kind": "json"
+    },
+    {
+      "method": "GET",
+      "path": "/api/provider/:param",
+      "kind": "json"
+    },
+    {
+      "method": "GET",
+      "path": "/api/integration",
+      "kind": "json"
+    },
+    {
+      "method": "GET",
+      "path": "/api/integration/:param",
+      "kind": "json"
+    },
+    {
+      "method": "POST",
+      "path": "/api/experimental/integration/wellknown",
+      "kind": "json"
+    },
+    {
+      "method": "POST",
+      "path": "/api/integration/:param/connect/key",
+      "kind": "json"
+    },
+    {
+      "method": "POST",
+      "path": "/api/integration/:param/connect/external",
+      "kind": "json"
+    },
+    {
+      "method": "POST",
+      "path": "/api/integration/:param/connect/oauth",
+      "kind": "json"
+    },
+    {
+      "method": "GET",
+      "path": "/api/integration/:param/connect/oauth/:param",
+      "kind": "json"
+    },
+    {
+      "method": "POST",
+      "path": "/api/integration/:param/connect/oauth/:param/complete",
+      "kind": "json"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/integration/:param/connect/oauth/:param",
+      "kind": "json"
+    },
+    {
+      "method": "POST",
+      "path": "/api/integration/:param/connect/command",
+      "kind": "json"
+    },
+    {
+      "method": "GET",
+      "path": "/api/integration/:param/connect/command/:param",
+      "kind": "json"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/integration/:param/connect/command/:param",
+      "kind": "json"
+    },
+    {
+      "method": "GET",
+      "path": "/api/mcp",
+      "kind": "json"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/experimental/mcp/:param",
+      "kind": "json"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/experimental/mcp/:param",
+      "kind": "json"
+    },
+    {
+      "method": "POST",
+      "path": "/api/experimental/mcp/:param/connect",
+      "kind": "json"
+    },
+    {
+      "method": "POST",
+      "path": "/api/experimental/mcp/:param/disconnect",
+      "kind": "json"
+    },
+    {
+      "method": "GET",
+      "path": "/api/mcp/resource",
+      "kind": "json"
+    },
+    {
+      "method": "POST",
+      "path": "/api/credential",
+      "kind": "json"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/credential/:param",
+      "kind": "json"
+    },
+    {
+      "method": "POST",
+      "path": "/api/credential/:param/activate",
+      "kind": "json"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/credential/:param",
+      "kind": "json"
+    },
+    {
+      "method": "GET",
+      "path": "/api/project",
+      "kind": "json"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/project/:param",
+      "kind": "json"
+    },
+    {
+      "method": "GET",
+      "path": "/api/form",
+      "kind": "json"
+    },
+    {
+      "method": "GET",
+      "path": "/api/permission/request",
+      "kind": "json"
+    },
+    {
+      "method": "GET",
+      "path": "/api/permission/saved",
+      "kind": "json"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/permission/saved/:param",
+      "kind": "json"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/permission/saved/:param",
+      "kind": "json"
+    },
+    {
+      "method": "POST",
+      "path": "/api/session/:param/permission",
+      "kind": "json"
+    },
+    {
+      "method": "GET",
+      "path": "/api/session/:param/permission",
+      "kind": "json"
+    },
+    {
+      "method": "GET",
+      "path": "/api/session/:param/permission/:param",
+      "kind": "json"
+    },
+    {
+      "method": "POST",
+      "path": "/api/session/:param/permission/:param/reply",
+      "kind": "json"
+    },
+    {
+      "method": "GET",
+      "path": "/api/fs/read/:param",
+      "kind": "json"
+    },
+    {
+      "method": "GET",
+      "path": "/api/fs/list",
+      "kind": "json"
+    },
+    {
+      "method": "GET",
+      "path": "/api/fs/find",
+      "kind": "json"
+    },
+    {
+      "method": "POST",
+      "path": "/api/experimental/fs/write",
+      "kind": "json"
+    },
+    {
+      "method": "GET",
+      "path": "/api/command",
+      "kind": "json"
+    },
+    {
+      "method": "GET",
+      "path": "/api/skill",
+      "kind": "json"
+    },
+    {
+      "method": "POST",
+      "path": "/api/rpc/:param/:param",
+      "kind": "json"
+    },
+    {
+      "method": "GET",
+      "path": "/api/pty",
+      "kind": "json"
+    },
+    {
+      "method": "POST",
+      "path": "/api/pty",
+      "kind": "json"
+    },
+    {
+      "method": "GET",
+      "path": "/api/pty/:param",
+      "kind": "json"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/pty/:param",
+      "kind": "json"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/pty/:param",
+      "kind": "json"
+    },
+    {
+      "method": "POST",
+      "path": "/api/pty/:param/connect-token",
+      "kind": "json"
+    },
+    {
+      "method": "GET",
+      "path": "/api/experimental/session/:param/terminal/read",
+      "kind": "json"
+    },
+    {
+      "method": "GET",
+      "path": "/api/experimental/session/:param/terminal",
+      "kind": "json"
+    },
+    {
+      "method": "POST",
+      "path": "/api/experimental/session/:param/terminal",
+      "kind": "json"
+    },
+    {
+      "method": "POST",
+      "path": "/api/experimental/persistent-pty/shutdown",
+      "kind": "json"
+    },
+    {
+      "method": "POST",
+      "path": "/api/experimental/persistent-pty/handoff",
+      "kind": "json"
+    },
+    {
+      "method": "GET",
+      "path": "/api/experimental/persistent-pty/:param",
+      "kind": "json"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/experimental/persistent-pty/:param",
+      "kind": "json"
+    },
+    {
+      "method": "GET",
+      "path": "/api/experimental/persistent-pty/:param/snapshot",
+      "kind": "json"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/experimental/persistent-pty/:param",
+      "kind": "json"
+    },
+    {
+      "method": "POST",
+      "path": "/api/experimental/persistent-pty/:param/connect-token",
+      "kind": "json"
+    },
+    {
+      "method": "GET",
+      "path": "/api/shell",
+      "kind": "json"
+    },
+    {
+      "method": "POST",
+      "path": "/api/shell",
+      "kind": "json"
+    },
+    {
+      "method": "GET",
+      "path": "/api/shell/:param",
+      "kind": "json"
+    },
+    {
+      "method": "GET",
+      "path": "/api/shell/:param/output",
+      "kind": "json"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/shell/:param",
+      "kind": "json"
+    },
+    {
+      "method": "GET",
+      "path": "/api/reference",
+      "kind": "json"
+    },
+    {
+      "method": "GET",
+      "path": "/api/worktree",
+      "kind": "json"
+    },
+    {
+      "method": "POST",
+      "path": "/api/worktree",
+      "kind": "json"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/worktree",
+      "kind": "json"
+    },
+    {
+      "method": "POST",
+      "path": "/api/worktree/refresh",
+      "kind": "json"
+    },
+    {
+      "method": "POST",
+      "path": "/api/vcs/init",
+      "kind": "json"
+    },
+    {
+      "method": "GET",
+      "path": "/api/vcs",
+      "kind": "json"
+    },
+    {
+      "method": "GET",
+      "path": "/api/vcs/base",
+      "kind": "json"
+    },
+    {
+      "method": "GET",
+      "path": "/api/vcs/status",
+      "kind": "json"
+    },
+    {
+      "method": "GET",
+      "path": "/api/vcs/branch",
+      "kind": "json"
+    },
+    {
+      "method": "GET",
+      "path": "/api/vcs/diff",
+      "kind": "json"
+    },
+    {
+      "method": "GET",
+      "path": "/api/debug/location",
+      "kind": "json"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/debug/location",
+      "kind": "json"
+    },
+    {
+      "method": "GET",
+      "path": "/api/experimental/migration/v1",
+      "kind": "json"
+    },
+    {
+      "method": "GET",
+      "path": "/api/websearch/provider",
+      "kind": "json"
+    },
+    {
+      "method": "POST",
+      "path": "/api/websearch",
+      "kind": "json"
+    },
+    {
+      "method": "GET",
+      "path": "/api/config",
+      "kind": "json"
+    },
+    {
+      "method": "GET",
+      "path": "/api/config/shell",
+      "kind": "json"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/experimental/config",
+      "kind": "json"
+    }
   ]
 }

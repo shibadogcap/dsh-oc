@@ -47,16 +47,16 @@ wait_assistant_text() {
 seed_tool_session() {
   local bridge="$1"
   local session
-  session="$(curl -s -X POST "$bridge/session" -H 'Content-Type: application/json' -d '{}' | jq -er .id)"
-  curl -s -X POST "$bridge/session/$session/message" -H 'Content-Type: application/json' \
-    -d '{"parts":[{"type":"text","text":"e2e: write a file with a tool"}]}' | jq -e '.info.role == "assistant"' >/dev/null
+  session="$(curl -s -X POST "$bridge/api/session" -H 'Content-Type: application/json' -d '{}' | jq -er .data.id)"
+  curl -s -X POST "$bridge/api/session/$session/prompt" -H 'Content-Type: application/json' \
+    -d '{"parts":[{"type":"text","text":"e2e: write a file with a tool"}]}' | jq -e '.data.sessionID != null' >/dev/null
   echo "$session"
 }
 
 start_sse() {
   local bridge="$1"
   local file="$2"
-  curl -sN --max-time 180 "$bridge/global/event" > "$file" &
+  curl -sN --max-time 180 "$bridge/api/event" > "$file" &
   SSE_PID=$!
   sleep 2
 }
@@ -80,13 +80,13 @@ EDIT_BRIDGE="$E2E_BRIDGE_URL"
 start_sse "$EDIT_BRIDGE" "$E2E_RUN_DIR/tools-edit-sse.txt"
 EDIT_SESSION="$(seed_tool_session "$EDIT_BRIDGE")"
 echo "  edit session: $EDIT_SESSION"
-wait_assistant_text "$EDIT_BRIDGE/session/$EDIT_SESSION/message" "mock response recovered"
+wait_assistant_text "$EDIT_BRIDGE/api/session/$EDIT_SESSION/message" "mock response recovered"
 
-EDIT_TOOL_JSON="$(curl -s "$EDIT_BRIDGE/session/$EDIT_SESSION/message" | jq -c '[.. | objects | select(.type == "tool") | {tool,state}] | .[0]')"
-jq -e '.tool == "edit" and .state.status == "completed" and (.state.metadata.diff | type) == "string" and (.state.metadata.diff | length > 0)' <<<"$EDIT_TOOL_JSON" >/dev/null
+EDIT_TOOL_JSON="$(curl -s "$EDIT_BRIDGE/api/session/$EDIT_SESSION/message" | jq -c '[.. | objects | select(.type == "tool") | {name,state}] | .[0]')"
+jq -e '.name == "edit" and .state.status == "completed" and (.state.metadata.diff | type) == "string" and (.state.metadata.diff | length > 0)' <<<"$EDIT_TOOL_JSON" >/dev/null
 echo "  dsh write rendered as edit card with metadata.diff"
 EDIT_DIFF="$(curl -s "$EDIT_BRIDGE/api/session/$EDIT_SESSION/diff")"
-if jq -e 'any(.[]; (.file // "") | endswith("created.txt"))' <<<"$EDIT_DIFF" >/dev/null; then
+if jq -e 'any(.data[]; (.file // "") | endswith("created.txt"))' <<<"$EDIT_DIFF" >/dev/null; then
   echo "e2e: untracked created.txt leaked into API diff" >&2
   exit 1
 fi
@@ -115,15 +115,15 @@ BASH_BRIDGE="$E2E_BRIDGE_URL"
 start_sse "$BASH_BRIDGE" "$E2E_RUN_DIR/tools-bash-sse.txt"
 BASH_SESSION="$(seed_tool_session "$BASH_BRIDGE")"
 echo "  bash session: $BASH_SESSION"
-wait_assistant_text "$BASH_BRIDGE/session/$BASH_SESSION/message" "mock response recovered"
+wait_assistant_text "$BASH_BRIDGE/api/session/$BASH_SESSION/message" "mock response recovered"
 
-BASH_TOOL="$(curl -s "$BASH_BRIDGE/session/$BASH_SESSION/message" | jq -r '[.. | objects | select(.type == "tool") | .tool] | join(" ")')"
+BASH_TOOL="$(curl -s "$BASH_BRIDGE/api/session/$BASH_SESSION/message" | jq -r '[.. | objects | select(.type == "tool") | .name] | join(" ")')"
 [[ "$BASH_TOOL" == *bash* ]]
 echo "  bash tool card: $BASH_TOOL"
-BASH_OUTPUT="$(curl -s "$BASH_BRIDGE/session/$BASH_SESSION/message" | jq -r '[.. | objects | select(.type == "tool" and .tool == "bash") | (.state.output // .state.metadata.output // "")] | join(" ")')"
+BASH_OUTPUT="$(curl -s "$BASH_BRIDGE/api/session/$BASH_SESSION/message" | jq -r '[.. | objects | select(.type == "tool" and .name == "bash") | ((.state.content // []) | map(.text // "") | join(""))] | join(" ")')"
 echo "  bash card output: ${BASH_OUTPUT:0:40}"
 BASH_DIFF="$(curl -s "$BASH_BRIDGE/api/session/$BASH_SESSION/diff")"
-jq -e --arg file "src/tracked.txt" 'any(.[]; .file == $file)' <<<"$BASH_DIFF" >/dev/null
+jq -e --arg file "src/tracked.txt" 'any(.data[]; .file == $file)' <<<"$BASH_DIFF" >/dev/null
 echo "  bash diff visible: $(jq -r '.[0].file' <<<"$BASH_DIFF")"
 [[ -f "$E2E_WORKDIR/src/tracked.txt" ]]
 echo "  bash modified tracked workdir file"

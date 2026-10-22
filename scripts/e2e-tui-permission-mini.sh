@@ -39,7 +39,7 @@ tmux send-keys -t "$E2E_TUI_SESSION" 'permission mini allow once' Enter
 SID=""
 deadline=$((SECONDS + 30))
 while (( SECONDS < deadline )); do
-  SID="$(curl -s "$E2E_BRIDGE_URL/session" | jq -r '.[0].id // empty' 2>/dev/null || true)"
+  SID="$(curl -s "$E2E_BRIDGE_URL/api/session" | jq -r '.data[0].id // empty' 2>/dev/null || true)"
   if [[ -n "$SID" ]]; then break; fi
   sleep 1
 done
@@ -49,7 +49,7 @@ echo "  session $SID"
 echo "== wait for the permission dialog =="
 deadline=$((SECONDS + 60))
 while (( SECONDS < deadline )); do
-  local_pending="$(curl -s "$E2E_BRIDGE_URL/permission" | jq 'length' 2>/dev/null || echo 0)"
+  local_pending="$(curl -s "$E2E_BRIDGE_URL/api/permission/request" | jq '.data | length' 2>/dev/null || echo 0)"
   e2e_tui_capture "$E2E_RUN_DIR/perm-dialog.txt"
   if [[ "$local_pending" != "0" ]] \
     && grep -qa 'Permission required' "$E2E_RUN_DIR/perm-dialog.txt" \
@@ -74,8 +74,6 @@ recovery_wait_idle "$E2E_BRIDGE_URL" "$SID"
 
 echo "== exactly-once and tool assertions =="
 recovery_signature_v2 "$E2E_BRIDGE_URL" "$SID" "$E2E_RUN_DIR/final-v2.json"
-recovery_signature_v1 "$E2E_BRIDGE_URL" "$SID" "$E2E_RUN_DIR/final-v1.json"
-recovery_assert_sane "$E2E_RUN_DIR/final-v1.json" "$E2E_RUN_DIR/final-v2.json"
 
 if ! jq -e '
     ([ .[] | select(.type == "assistant") | .parts[]
@@ -87,7 +85,7 @@ if ! jq -e '
   cat "$E2E_RUN_DIR/final-v2.json" >&2
   exit 1
 fi
-if [[ "$(curl -s "$E2E_BRIDGE_URL/permission" | jq 'length')" != "0" ]]; then
+if [[ "$(curl -s "$E2E_BRIDGE_URL/api/permission/request" | jq '.data | length')" != "0" ]]; then
   echo "e2e: permission dialog still pending after approve" >&2
   exit 1
 fi

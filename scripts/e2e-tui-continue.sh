@@ -32,14 +32,14 @@ seed_session() {
   local text="$1"
   local title="$2"
   local session
-  session="$(curl -s -X POST "$SEED_URL/session" -H 'Content-Type: application/json' \
-    -d "{\"title\":\"$title\",\"agent\":\"build\"}" | jq -er .id)"
-  curl -s -X POST "$SEED_URL/session/$session/message" -H 'Content-Type: application/json' \
-    -d "{\"parts\":[{\"type\":\"text\",\"text\":\"$text\"}]}" | jq -e '.info.role == "assistant"' >/dev/null
+  session="$(curl -s -X POST "$SEED_URL/api/session" -H 'Content-Type: application/json' \
+    -d "{\"title\":\"$title\",\"agent\":\"build\"}" | jq -er .data.id)"
+  curl -s -X POST "$SEED_URL/api/session/$session/prompt" -H 'Content-Type: application/json' \
+    -d "{\"parts\":[{\"type\":\"text\",\"text\":\"$text\"}]}" | jq -e '.data.sessionID != null' >/dev/null
   local deadline=$((SECONDS + 60))
   while (( SECONDS < deadline )); do
     local got
-    got="$(curl -s "$SEED_URL/session/$session/message" | jq -r '[.. | objects | select(has("text")) | .text] | join(" ")' 2>/dev/null || true)"
+    got="$(curl -s "$SEED_URL/api/session/$session/message" | jq -r '[.. | objects | select(has("text")) | .text] | join(" ")' 2>/dev/null || true)"
     if [[ "$got" == *"mock response recovered"* ]]; then break; fi
     sleep 1
   done
@@ -84,7 +84,7 @@ fi
 echo "  newest session visible: $CONTINUE_HINT"
 
 echo "== resumed session real title =="
-CONTINUE_TITLES="$(curl -s "$E2E_BRIDGE_URL/session" | jq -r '.[].title' 2>/dev/null || true)"
+CONTINUE_TITLES="$(curl -s "$E2E_BRIDGE_URL/api/session" | jq -r '.data[].title' 2>/dev/null || true)"
 if ! grep -q 'Continue Title B' <<<"$CONTINUE_TITLES"; then
   echo "e2e: resumed session real title not visible in the session list" >&2
   echo "$CONTINUE_TITLES" >&2

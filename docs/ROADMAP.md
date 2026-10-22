@@ -221,13 +221,13 @@ history 投影对比，不是 live SSE 对比，父链断言恒为空。接受�
 ## N1. 关闭 opencode 子进程自动更新与热更新
 
 ### 背景
-oc-tui 以子进程运行官方 `opencode attach`。opencode 自身可能检查新版本、自动下载/热更新，导致：
+oc-tui 以子进程运行官方 `opencode --server`。opencode 自身可能检查新版本、自动下载/热更新，导致：
 - 启动时连接外网，可能超时；
 - 二进制版本脱离 `opencode-version.json` 锁定，与 dsh-oc bridge 协议不匹配。
 
 ### 要求
 1. 在 `src/tui/index.ts` 的 `buildChildEnv` 中显式关闭 opencode 自动更新：
-   - 先查 opencode 1.18.18 支持的 env/flag：`OPENCODE_DISABLE_AUTOUPDATE`、`OPENCODE_AUTOUPDATE=false`、`OPENCODE_DISABLE_AUTOUPDATE_CHECK` 等，以源码为准。
+   - 先查 opencode 2.1.0 支持的 env/flag：`OPENCODE_DISABLE_AUTOUPDATE`、`OPENCODE_AUTOUPDATE=false`、`OPENCODE_DISABLE_AUTOUPDATE_CHECK` 等，以源码为准。
    - 同时设置 `OPENCODE_DISABLE_UPDATE=true`（如果存在该开关）。
    - 不使用不确定的开关；不确定时用 opencode 源码验证。
 2. 避免 opencode 热替换自身：

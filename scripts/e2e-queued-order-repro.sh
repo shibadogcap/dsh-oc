@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Official-TUI out-of-order repro record (experiment 1c): drives the known
-# edge case against the real opencode 1.18.18 TUI:
+# edge case against the real opencode 2.1.0 TUI:
 #   tool-call turn -> tool result -> slow follow-up text streaming
 #   -> second prompt queued from the keyboard while the follow-up streams
 # The script records the observed pane ordering (follow-up vs queued card),
@@ -50,7 +50,7 @@ tmux send-keys -t "$E2E_TUI_SESSION" 'order repro tool prompt' Enter
 SID=""
 deadline=$((SECONDS + 30))
 while (( SECONDS < deadline )); do
-  SID="$(curl -s "$E2E_BRIDGE_URL/session" | jq -r '.[0].id // empty' 2>/dev/null || true)"
+  SID="$(curl -s "$E2E_BRIDGE_URL/api/session" | jq -r '.data[0].id // empty' 2>/dev/null || true)"
   if [[ -n "$SID" ]]; then break; fi
   sleep 1
 done
@@ -123,8 +123,6 @@ SSE_PID=""
 
 echo "== final exactly-once graph assertions =="
 recovery_signature_v2 "$E2E_BRIDGE_URL" "$SID" "$E2E_RUN_DIR/final-v2.json"
-recovery_signature_v1 "$E2E_BRIDGE_URL" "$SID" "$E2E_RUN_DIR/final-v1.json"
-recovery_assert_sane "$E2E_RUN_DIR/final-v1.json" "$E2E_RUN_DIR/final-v2.json"
 if ! jq -e '
     ([ .[] | select(.type == "user") ] | length) == 2
     and ([ .[] | select(.type == "assistant") | .parts[]
@@ -156,7 +154,7 @@ else
 ORDER="neither-marker-visible"
 fi
 echo "observed pane order: $ORDER (followup line=${FOLLOW_LINE:-na}, queued line=${QUEUED_LINE:-na})"
-printf 'scenario=queued-followup\nopencode=1.18.18\ntransient_order=%s\nfinal_order=%s\nframes=%s\nfollowup_line=%s\nqueued_line=%s\n' \
+printf 'scenario=queued-followup\nopencode=2.1.0\ntransient_order=%s\nfinal_order=%s\nframes=%s\nfollowup_line=%s\nqueued_line=%s\n' \
   "$TRANSIENT" "$ORDER" "$FRAME_COUNT" "${FOLLOW_LINE:-na}" "${QUEUED_LINE:-na}" > "$E2E_RUN_DIR/order.txt"
 
 echo "== freeze normalized SSE baseline =="

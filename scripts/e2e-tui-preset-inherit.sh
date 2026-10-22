@@ -78,12 +78,12 @@ echo "  /preset minimal result rendered without a stale QUEUED badge"
 
 # The blank session is created lazily by the TUI and may not be listed until
 # the first command has completed. Resolve it now for the model comparison.
-PRESET_SESSION="$(e2e_curl -s "$E2E_BRIDGE_URL/session" \
-  | jq -r 'map(select(.agent == "minimal")) | .[0].id // empty')"
+PRESET_SESSION="$(e2e_curl -s "$E2E_BRIDGE_URL/api/session" \
+  | jq -r '.data | map(select(.agent == "minimal")) | .[0].id // empty')"
 if [[ -z "$PRESET_SESSION" ]]; then
   # A host list refresh can lag the live session.updated edge; the newest
   # listed session is still a safe fallback in this fresh per-run profile.
-  PRESET_SESSION="$(e2e_curl -s "$E2E_BRIDGE_URL/session" | jq -r '.[-1].id // empty')"
+  PRESET_SESSION="$(e2e_curl -s "$E2E_BRIDGE_URL/api/session" | jq -r '.data[-1].id // empty')"
 fi
 if [[ -z "$PRESET_SESSION" ]]; then
   echo "e2e: could not identify the TUI session after /preset" >&2
@@ -95,17 +95,17 @@ fi
 SESSION_JSON="$(e2e_curl -s "$E2E_BRIDGE_URL/api/session/$PRESET_SESSION")"
 SESSION_MODEL="$(jq -r '.data.model.id // empty' <<<"$SESSION_JSON")"
 SESSION_PROVIDER="$(jq -r '.data.model.providerID // empty' <<<"$SESSION_JSON")"
-PRESET_MESSAGES="$(e2e_curl -s "$E2E_BRIDGE_URL/session/$PRESET_SESSION/message")"
+PRESET_MESSAGES="$(e2e_curl -s "$E2E_BRIDGE_URL/api/session/$PRESET_SESSION/message")"
 PRESET_COMMAND="$(jq -c '
-  [ .[]
-    | select((.info.id // "") | startswith("msg_cmd:"))
-    | select(.info.time.completed != null)
-    | select(([.parts[]? | select(.type == "text") | .text] | join("\n"))
+  [ .data[]
+    | select((.id // "") | startswith("msg_cmd:"))
+    | select(.time.completed != null)
+    | select(([.content[]? | select(.type == "text") | .text] | join("\n"))
       | contains("Switched dsh agent preset to minimal"))
   ] | last // {}
 ' <<<"$PRESET_MESSAGES")"
-PRESET_MODEL="$(jq -r '.info.modelID // empty' <<<"$PRESET_COMMAND")"
-PRESET_PROVIDER="$(jq -r '.info.providerID // empty' <<<"$PRESET_COMMAND")"
+PRESET_MODEL="$(jq -r '.model.id // empty' <<<"$PRESET_COMMAND")"
+PRESET_PROVIDER="$(jq -r '.model.providerID // empty' <<<"$PRESET_COMMAND")"
 if [[ -z "$SESSION_MODEL" || -z "$PRESET_MODEL" || "$SESSION_MODEL" != "$PRESET_MODEL" \
   || "$SESSION_PROVIDER" != "$PRESET_PROVIDER" ]]; then
   echo "e2e: final completed /preset command model differs from session model" >&2
@@ -133,8 +133,8 @@ echo "== create a fresh session (same bridge inherits lastAgentPreset) =="
 NEW_SID=""
 deadline=$((SECONDS + 30))
 while (( SECONDS < deadline )); do
-  NEW_SID="$(curl -s -X POST "$E2E_BRIDGE_URL/session" -H 'Content-Type: application/json' \
-    -d '{}' | jq -r '.id // empty' 2>/dev/null || true)"
+  NEW_SID="$(curl -s -X POST "$E2E_BRIDGE_URL/api/session" -H 'Content-Type: application/json' \
+    -d '{}' | jq -r '.data.id // empty' 2>/dev/null || true)"
   if [[ -n "$NEW_SID" ]]; then break; fi
   sleep 1
 done
@@ -142,12 +142,12 @@ done
 echo "  new session: $NEW_SID"
 
 echo "== submit a prompt and wait for the reply =="
-curl -s -X POST "$E2E_BRIDGE_URL/session/$NEW_SID/message" \
+curl -s -X POST "$E2E_BRIDGE_URL/api/session/$NEW_SID/prompt" \
   -H 'Content-Type: application/json' \
   -d '{"parts":[{"type":"text","text":"preset inherit check"}]}' >/dev/null
 deadline=$((SECONDS + 60))
 while (( SECONDS < deadline )); do
-  text="$(curl -s "$E2E_BRIDGE_URL/session/$NEW_SID/message" \
+  text="$(curl -s "$E2E_BRIDGE_URL/api/session/$NEW_SID/message" \
     | jq -r '[.. | objects | select(has("text")) | .text] | join(" ")' 2>/dev/null || true)"
   if [[ "$text" == *"preset inherit check"* && "$text" == *"mock response recovered"* ]]; then
     break

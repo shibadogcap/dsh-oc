@@ -61,6 +61,39 @@ afterEach(async () => {
   for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true })
 })
 
+/** The 2.x message list shape the shell-card assertions read. */
+type V2Messages = {
+  data: Array<{
+    id?: string
+    type?: string
+    content?: Array<{
+      type?: string
+      name?: string
+      state?: { status?: string; content?: Array<{ text?: string }> }
+    }>
+  }>
+}
+
+/**
+ * Collect the text of every command card the bridge broadcasts. The 2.x
+ * command route answers with 204, so the visible result travels over SSE.
+ */
+function captureBroadcastTexts(router: BridgeRouter): string[] {
+  const hub = router.ctx.hub
+  const originalBroadcast = hub.broadcast.bind(hub)
+  const texts: string[] = []
+  ;(hub as unknown as {
+    broadcast(events: Array<{ payload: { type?: string; properties?: { part?: { text?: string } } } }>): void
+  }).broadcast = (events) => {
+    for (const event of events) {
+      const text = event.payload.properties?.part?.text
+      if (typeof text === 'string') texts.push(text)
+    }
+    originalBroadcast(events as never)
+  }
+  return texts
+}
+
 async function request(
   server: BridgeServerHandle,
   method: string,
@@ -87,16 +120,6 @@ async function request(
 }
 
 const STARTUP_GET_ROUTES = [
-  '/path',
-  '/project/current',
-  '/config/providers',
-  '/provider',
-  '/experimental/capabilities',
-  '/experimental/console',
-  '/agent',
-  '/config',
-  '/project/global/directories',
-  '/session',
   '/api/location',
   '/api/agent',
   '/api/integration',
@@ -105,14 +128,12 @@ const STARTUP_GET_ROUTES = [
   '/api/reference',
   '/api/command',
   '/api/skill',
-  '/command',
   '/lsp',
   '/mcp',
   '/experimental/resource',
   '/formatter',
-  '/session/status',
-  '/provider/auth',
-  '/vcs',
+  '/experimental/capabilities',
+  '/experimental/console',
   '/experimental/workspace',
   '/experimental/workspace/status',
 ] as const
@@ -186,7 +207,6 @@ describe('bridge router: startup GET routes', () => {
 
   it('returns the stub shapes exactly', async () => {
     const { server } = await boot(fakeApi())
-    expect((await request(server, 'GET', '/config')).body).toEqual({ autoupdate: false })
     expect((await request(server, 'GET', '/lsp')).body).toEqual([])
     expect((await request(server, 'GET', '/mcp')).body).toEqual({})
     expect((await request(server, 'GET', '/formatter')).body).toEqual([])
@@ -204,27 +224,11 @@ describe('bridge router: startup GET routes', () => {
     expect((await request(server, 'POST', '/global/dispose')).body).toBe(true)
     expect((await request(server, 'POST', '/instance/dispose')).body).toBe(true)
     expect((await request(server, 'POST', '/experimental/session/s1/background')).body).toBe(true)
-    expect((await request(server, 'GET', '/vcs')).body).toEqual({})
     expect((await request(server, 'GET', '/experimental/workspace')).body).toEqual([])
     expect((await request(server, 'GET', '/experimental/workspace/status')).body).toEqual([])
   })
 
-  it('serves real vcs info, status, diff and raw diff from the workspace', async () => {
-    const work = gitFixture({ 'a.txt': 'one\n' })
-    writeFileSync(join(work, 'a.txt'), 'two\n')
-    const { server } = await boot(fakeApi(), work)
-    const info = await request(server, 'GET', '/vcs')
-    expect(info.body).toMatchObject({ branch: 'main' })
-    const status = await request(server, 'GET', '/vcs/status')
-    expect(status.body).toEqual([{ file: 'a.txt', additions: 1, deletions: 1, status: 'modified' }])
-    const diff = await request(server, 'GET', '/vcs/diff')
-    expect(diff.body).toHaveLength(1)
-    expect((diff.body as Array<{ patch?: string }>)[0]?.patch).toContain('diff --git')
-    const raw = await request(server, 'GET', '/vcs/diff/raw')
-    expect(raw.body).toContain('diff --git')
-  })
-
-  it('setCwd changes /path and session create honors the directory query', async () => {
+  it('setCwd changes the reported location and session create honors the directory query', async () => {
     const calls: Array<{ method: string; payload: unknown }> = []
     const base = fakeApi()
     const api: BridgeApi = {
@@ -239,14 +243,14 @@ describe('bridge router: startup GET routes', () => {
     }
     const { server, router } = await boot(api, '/work')
 
-    let path = await request(server, 'GET', '/path')
-    expect((path.body as { directory: string }).directory).toBe('/work')
+    let location = await request(server, 'GET', '/api/location')
+    expect((location.body as { directory: string }).directory).toBe('/work')
 
     router.setCwd('/sub')
-    path = await request(server, 'GET', '/path')
-    expect((path.body as { directory: string }).directory).toBe('/sub')
+    location = await request(server, 'GET', '/api/location')
+    expect((location.body as { directory: string }).directory).toBe('/sub')
 
-    const created = await request(server, 'POST', '/session?directory=/sub2', {})
+    const created = await request(server, 'POST', '/api/session?directory=/sub2', {})
     expect(created.status).toBe(200)
     expect(calls[0]).toMatchObject({
       method: 'session.create',
@@ -277,16 +281,6 @@ describe('bridge router: startup GET routes', () => {
       },
     }
     const { server } = await boot(api)
-    const v1 = await request(server, 'GET', '/agent')
-    expect(v1.status).toBe(200)
-    expect(v1.body).toMatchObject([
-      {
-        name: 'build',
-        mode: 'primary',
-        permission: [],
-        model: { providerID: 'deepseek', modelID: 'deepseek-chat' },
-      },
-    ])
     const v2 = await request(server, 'GET', '/api/agent')
     expect(v2.status).toBe(200)
     expect(v2.body).toMatchObject({
@@ -309,11 +303,6 @@ describe('bridge router: startup GET routes', () => {
       },
     }
     const { server } = await boot(api)
-    const v1 = await request(server, 'GET', '/agent')
-    const names = (v1.body as Array<{ name: string }>).map((agent) => agent.name)
-    expect(names[0]).toBe('minimal')
-    expect(names).not.toContain('build')
-    expect(names).toEqual(['minimal', 'standard'])
     const v2 = await request(server, 'GET', '/api/agent')
     expect((v2.body as { data: Array<{ id: string }> }).data.map((agent) => agent.id)).toEqual([
       'minimal',
@@ -375,67 +364,22 @@ describe('bridge router: session routes', () => {
     updatedAt: 2000,
     running: true,
     blank: false,
+    agentAvailable: false,
     cwd: '/work',
     agentPreset: 'build',
-    projections: { asOfSeq: 0, values: { title: 'Session One' } as never },
+    projections: { kind: 'sequenced' as 'sequenced', asOfSeq: 0, values: { title: 'Session One' } as never },
   }
 
-  it('lists sessions and status for v1 and v2', async () => {
+  it('lists sessions for v2', async () => {
     const base = fakeApi()
     const api = {
       ...base,
       sessionController: { ...base.sessionController, list: async () => okRpc({ items: [item] }) },
     }
     const { server } = await boot(api)
-    const v1 = await request(server, 'GET', '/session')
-    expect(v1.status).toBe(200)
-    expect((v1.body as Array<{ id: string; title: string; slug: string }>)[0]).toMatchObject({
-      id: 's1',
-      slug: 's1',
-      title: 'Session One',
-    })
-    const status = await request(server, 'GET', '/session/status')
-    expect(status.body).toEqual({ s1: { type: 'busy' } })
     const v2 = await request(server, 'GET', '/api/session')
     expect(v2.status).toBe(200)
     expect(v2.body).toMatchObject({ data: [{ id: 's1', title: 'Session One' }], cursor: {} })
-  })
-
-  it('serves repeated status polls from memory instead of rescanning the corpus', async () => {
-    let listCalls = 0
-    const items = Array.from({ length: 1000 }, (_, index) => ({
-      ...item,
-      sessionId: `s-${index}` as never,
-      cwd: index % 2 === 0 ? '/work' : '/other',
-      running: index === 6,
-      updatedAt: index,
-    }))
-    const base = fakeApi()
-    const api: BridgeApi = {
-      ...base,
-      sessionController: {
-        ...base.sessionController,
-        list: async () => {
-          listCalls++
-          return okRpc({ items })
-        },
-      },
-    }
-    const { server, router } = await boot(api)
-    for (let index = 0; index < 100; index++) {
-      const result = await request(server, 'GET', '/session/status?directory=/work')
-      expect(result.status).toBe(200)
-      expect((result.body as Record<string, unknown>)['s-6']).toEqual({ type: 'busy' })
-    }
-    expect(listCalls).toBe(1)
-    expect(router.ctx.state.sessionStatusRequests).toBe(100)
-    expect(router.ctx.state.sessionStatusSeeds).toBe(1)
-
-    router.feedHostFrame({ type: 'host/session-status', sessionId: 's-6', running: false })
-    await new Promise((resolve) => setTimeout(resolve, 0))
-    const idle = await request(server, 'GET', '/session/status?directory=/work')
-    expect((idle.body as Record<string, unknown>)['s-6']).toEqual({ type: 'idle' })
-    expect(listCalls).toBe(1)
   })
 
   it('tracks turn start/end edges in the authoritative status map', async () => {
@@ -557,14 +501,12 @@ describe('bridge router: session routes', () => {
           return okRpc({
             events: [],
             hasMore: false,
-            projections: { asOfSeq: 2, values: { title: 'Real Title' } as never },
+            projections: { kind: 'sequenced' as 'sequenced', asOfSeq: 2, values: { title: 'Real Title' } as never },
           })
         },
       },
     }
     const { server } = await boot(api)
-    const v1 = await request(server, 'GET', '/session')
-    expect((v1.body as Array<{ title: string }>).at(0)?.title).toBe('Real Title')
     const v2 = await request(server, 'GET', '/api/session')
     expect((v2.body as { data: Array<{ title: string }> }).data.at(0)?.title).toBe('Real Title')
     expect(historyCalls).toBe(1)
@@ -580,7 +522,8 @@ describe('bridge router: session routes', () => {
         list: async () => okRpc({
           items: [
             { ...item, projections: undefined },
-            { ...item, sessionId: 's-blank' as never, blank: true, projections: undefined },
+            { ...item, sessionId: 's-blank' as never, blank: true,
+    agentAvailable: false, projections: undefined },
           ],
         }),
         history: async () => {
@@ -590,8 +533,8 @@ describe('bridge router: session routes', () => {
       },
     }
     const { server } = await boot(api)
-    const result = await request(server, 'GET', '/session')
-    const titles = (result.body as Array<{ id: string; title: string }>).map((entry) => entry.title)
+    const result = await request(server, 'GET', '/api/session')
+    const titles = (result.body as { data: Array<{ id: string; title: string }> }).data.map((entry) => entry.title)
     expect(titles).toEqual(['work', 'work'])
     expect(historyCalls).toBe(1)
   })
@@ -607,7 +550,7 @@ describe('bridge router: session routes', () => {
     }
     const { server, router } = await boot(api)
     expect(router.hasNewActivity()).toBe(false)
-    const result = await request(server, 'POST', '/session', {})
+    const result = await request(server, 'POST', '/api/session', {})
     expect(result.status).toBe(200)
     expect(router.hasNewActivity()).toBe(false)
     expect(await router.exitNoteNeeded()).toBe(false)
@@ -617,58 +560,12 @@ describe('bridge router: session routes', () => {
     const base = fakeApi()
     const { server, router } = await boot(base)
     expect(router.hasNewActivity()).toBe(false)
-    const result = await request(server, 'POST', '/session/s1/message', {
+    const result = await request(server, 'POST', '/api/session/s1/prompt', {
       parts: [{ type: 'text', text: 'hi' }],
     })
     expect(result.status).toBe(200)
     expect(router.hasNewActivity()).toBe(true)
     expect(await router.exitNoteNeeded()).toBe(true)
-  })
-
-  it('labels the first prompt placeholder with the session model and preset', async () => {
-    const base = fakeApi()
-    const api: BridgeApi = {
-      ...base,
-      sessionController: {
-        ...base.sessionController,
-        selectModel: async () => ({
-          selected: { provider: 'deepseek-official', model: 'deepseek-v4-pro', reasoningEffort: 'high' },
-        }),
-      },
-    }
-    const { server } = await boot(api)
-    const result = await request(server, 'POST', '/session/s1/message', {
-      // The OpenCode TUI sends its mapped default agent plus the selected model.
-      agent: 'build',
-      model: { providerID: 'deepseek', modelID: 'deepseek-v4-pro', variant: 'high' },
-      parts: [{ type: 'text', text: 'hi' }],
-    })
-    expect(result.status).toBe(200)
-    expect(result.body).toMatchObject({
-      info: {
-        role: 'assistant',
-        modelID: 'deepseek-v4-pro',
-        providerID: 'deepseek',
-        mode: 'minimal',
-      },
-    })
-  })
-
-  it('falls back to the deployment model for a model-less first prompt placeholder', async () => {
-    const { server } = await boot(fakeApi())
-    const result = await request(server, 'POST', '/session/s1/message', {
-      agent: 'build',
-      parts: [{ type: 'text', text: 'hi' }],
-    })
-    expect(result.status).toBe(200)
-    expect(result.body).toMatchObject({
-      info: {
-        role: 'assistant',
-        modelID: 'mock-model',
-        providerID: 'deepseek',
-        mode: 'minimal',
-      },
-    })
   })
 
   it('needs the exit note for a resumed session with a durable title', async () => {
@@ -680,7 +577,7 @@ describe('bridge router: session routes', () => {
         history: async () => okRpc({
           events: [],
           hasMore: false,
-          projections: { asOfSeq: 2, values: { title: 'Resumed Title' } as never },
+          projections: { kind: 'sequenced' as 'sequenced', asOfSeq: 2, values: { title: 'Resumed Title' } as never },
         }),
       },
     }
@@ -700,7 +597,7 @@ describe('bridge router: session routes', () => {
         history: async () => okRpc({
           events: [],
           hasMore: false,
-          projections: { asOfSeq: 1, values: { title: null } as never },
+          projections: { kind: 'sequenced' as 'sequenced', asOfSeq: 1, values: { title: null } as never },
         }),
       },
     }
@@ -812,14 +709,6 @@ describe('bridge router: session routes', () => {
     router.ctx.state.recordAssistantId('s1', 'dsh-tool', 'msg_turn_1')
     router.ctx.state.recordAssistantId('s1', 'dsh-text', 'msg_turn_1')
 
-    const v1 = await request(server, 'GET', '/session/s1/message')
-    expect(v1.status).toBe(200)
-    const v1Body = v1.body as Array<{ info: { id?: string; role?: string }; parts: Array<{ type?: string }> }>
-    const assistants = v1Body.filter((entry) => entry.info.role === 'assistant')
-    expect(assistants).toHaveLength(1)
-    expect(assistants[0]?.info.id).toBe('msg_turn_1')
-    expect(assistants[0]?.parts.map((part) => part.type)).toEqual(['tool', 'text'])
-
     const v2 = await request(server, 'GET', '/api/session/s1/message')
     expect(v2.status).toBe(200)
     const v2Body = v2.body as { data?: Array<{ id?: string; type?: string; content?: Array<{ type?: string }> }> }
@@ -846,10 +735,8 @@ describe('bridge router: session routes', () => {
         turn: 1, step: 1,
         message: {
           source: { kind: 'tool', callId: 'c1' },
-          content: [{
-            type: 'tool-result', toolCallId: 'c1',
-            content: [{ type: 'text', text: 'out' }],
-          }],
+          toolCallId: 'c1',
+          content: [{ type: 'text', text: 'out' }],
           role: 'assistant',
           id: 'r1',
         },
@@ -949,7 +836,7 @@ describe('bridge router: session routes', () => {
     expect(allBody.data?.map(textOf)).toEqual(['u1', 'a1', 'u2', 'a2', 'u3', 'a3'])
   })
 
-  it('remaps v1 parentIDs to surface ids in warm history', async () => {
+  it('remaps surface ids in warm history', async () => {
     const base = fakeApi()
     const api: BridgeApi = {
       ...base,
@@ -982,17 +869,6 @@ describe('bridge router: session routes', () => {
     router.ctx.state.setAssistantMessageCreatedAt('s1', 'msg_text_1', 1150)
     router.ctx.state.markAssistantPending('s1', 'msg_tool_1')
 
-    const v1 = await request(server, 'GET', '/session/s1/message')
-    expect(v1.status).toBe(200)
-    const v1Body = v1.body as Array<{ info: { id: string; role: string; parentID?: string; time?: { created?: number } } }>
-    expect(v1Body[0]?.info.id).toBe('msg_user_1')
-    expect(v1Body[1]?.info.parentID).toBe('msg_user_1')
-    expect(v1Body[2]?.info.parentID).toBe('msg_tool_1')
-    expect((v1Body[0]?.info.time as { created?: number }).created).toBe(900)
-    expect((v1Body[1]?.info.time as { created?: number }).created).toBe(1050)
-    expect((v1Body[2]?.info.time as { created?: number }).created).toBe(1150)
-    expect((v1Body[1]?.info.time as { completed?: number }).completed).toBeUndefined()
-
     const v2 = await request(server, 'GET', '/api/session/s1/message')
     const v2Body = v2.body as { data: Array<{ id: string; type?: string; time?: { created?: number; completed?: number } }> }
     expect(v2Body.data.find((entry) => entry.id === 'msg_tool_1')).toMatchObject({
@@ -1005,13 +881,6 @@ describe('bridge router: session routes', () => {
     })
     expect(v2Body.data.find((entry) => entry.id === 'msg_tool_1')?.time?.created).toBe(1050)
     expect(v2Body.data.find((entry) => entry.id === 'msg_tool_1')?.time?.completed).toBeUndefined()
-
-    const ids = new Set(v1Body.map((entry) => entry.info.id))
-    for (const entry of v1Body) {
-      if (entry.info.parentID !== undefined) {
-        expect(ids.has(entry.info.parentID)).toBe(true)
-      }
-    }
   })
 
   it('filters session lists by the directory query', async () => {
@@ -1023,17 +892,14 @@ describe('bridge router: session routes', () => {
     }
     const { server } = await boot(api)
 
-    const v1 = await request(server, 'GET', '/session?directory=/other')
-    expect((v1.body as Array<{ id: string }>).map((entry) => entry.id)).toEqual(['s2'])
+    const otherDir = await request(server, 'GET', '/api/session?directory=/other')
+    expect((otherDir.body as { data: Array<{ id: string }> }).data.map((entry) => entry.id)).toEqual(['s2'])
 
     const v2 = await request(server, 'GET', '/api/session?directory=/work')
     expect((v2.body as { data: Array<{ id: string }> }).data.map((entry) => entry.id)).toEqual(['s1'])
 
-    const status = await request(server, 'GET', '/session/status?directory=/other')
-    expect(status.body).toEqual({ s2: { type: 'busy' } })
-
-    const all = await request(server, 'GET', '/session')
-    expect((all.body as Array<{ id: string }>).map((entry) => entry.id)).toEqual(['s1', 's2'])
+    const all = await request(server, 'GET', '/api/session')
+    expect((all.body as { data: Array<{ id: string }> }).data.map((entry) => entry.id)).toEqual(['s1', 's2'])
   })
 
   it('resolves relative directory queries against the bridge cwd', async () => {
@@ -1044,9 +910,9 @@ describe('bridge router: session routes', () => {
       sessionController: { ...base.sessionController, list: async () => okRpc({ items: [item, sub] }) },
     }
     const { server } = await boot(api, '/work')
-    const result = await request(server, 'GET', '/session?directory=sub')
+    const result = await request(server, 'GET', '/api/session?directory=sub')
     expect(result.status).toBe(200)
-    expect((result.body as Array<{ id: string }>).map((entry) => entry.id)).toEqual(['s-sub'])
+    expect((result.body as { data: Array<{ id: string }> }).data.map((entry) => entry.id)).toEqual(['s-sub'])
   })
 
   it('caches the session list within TTL and invalidates on rename', async () => {
@@ -1068,12 +934,12 @@ describe('bridge router: session routes', () => {
     }
     const { server } = await boot(api)
 
-    await request(server, 'GET', '/session')
-    await request(server, 'GET', '/session')
+    await request(server, 'GET', '/api/session')
+    await request(server, 'GET', '/api/session')
     expect(calls.filter((call) => call === 'list')).toHaveLength(1)
 
-    await request(server, 'PATCH', '/session/s1', { title: 'x' })
-    await request(server, 'GET', '/session')
+    await request(server, 'PATCH', '/api/session/s1', { title: 'x' })
+    await request(server, 'GET', '/api/session')
     expect(calls.filter((call) => call === 'list')).toHaveLength(2)
   })
 
@@ -1093,7 +959,7 @@ describe('bridge router: session routes', () => {
     const { server, router } = await boot(api)
     router.prefetchSessionList()
     await new Promise((resolve) => setTimeout(resolve, 20))
-    const result = await request(server, 'GET', '/session')
+    const result = await request(server, 'GET', '/api/session')
     expect(result.status).toBe(200)
     expect(calls).toEqual(['list'])
   })
@@ -1139,7 +1005,7 @@ describe('bridge router: session routes', () => {
     const { server, router } = await boot(api)
     router.prefetchSession('s1')
     await new Promise((resolve) => setTimeout(resolve, 20))
-    const result = await request(server, 'GET', '/session/s1/message')
+    const result = await request(server, 'GET', '/api/session/s1/message')
     expect(result.status).toBe(200)
     expect(historyCalls).toEqual(['history'])
   })
@@ -1161,14 +1027,14 @@ describe('bridge router: session routes', () => {
     }
     const { server } = await boot(api)
 
-    await request(server, 'GET', '/session/s1/message?limit=10')
-    await request(server, 'GET', '/session/s1/message?limit=10')
+    await request(server, 'GET', '/api/session/s1/message?limit=10')
+    await request(server, 'GET', '/api/session/s1/message?limit=10')
     expect(historyCalls).toEqual(['10'])
 
-    await request(server, 'POST', '/session/s1/message', {
+    await request(server, 'POST', '/api/session/s1/prompt', {
       parts: [{ type: 'text', text: 'hi' }],
     })
-    await request(server, 'GET', '/session/s1/message?limit=10')
+    await request(server, 'GET', '/api/session/s1/message?limit=10')
     expect(historyCalls).toEqual(['10', '10'])
   })
 
@@ -1188,14 +1054,14 @@ describe('bridge router: session routes', () => {
     }
     const { server } = await boot(api)
     const [first, second] = await Promise.all([
-      request(server, 'GET', '/session'),
-      request(server, 'GET', '/session'),
+      request(server, 'GET', '/api/session'),
+      request(server, 'GET', '/api/session'),
     ])
     expect(listCalls).toBe(1)
     expect(first.status).toBe(200)
     expect(second.status).toBe(200)
-    expect((first.body as Array<{ id: string }>).map((entry) => entry.id)).toEqual(['s1', 's2'])
-    expect((second.body as Array<{ id: string }>).map((entry) => entry.id)).toEqual(['s1', 's2'])
+    expect((first.body as { data: Array<{ id: string }> }).data.map((entry) => entry.id)).toEqual(['s1', 's2'])
+    expect((second.body as { data: Array<{ id: string }> }).data.map((entry) => entry.id)).toEqual(['s1', 's2'])
   })
 
   it('coalesces concurrent history page loads into one RPC', async () => {
@@ -1214,8 +1080,8 @@ describe('bridge router: session routes', () => {
     }
     const { server } = await boot(api)
     const [first, second] = await Promise.all([
-      request(server, 'GET', '/session/s1/message?limit=10'),
-      request(server, 'GET', '/session/s1/message?limit=10'),
+      request(server, 'GET', '/api/session/s1/message?limit=10'),
+      request(server, 'GET', '/api/session/s1/message?limit=10'),
     ])
     expect(historyCalls).toBe(1)
     expect(first.status).toBe(200)
@@ -1236,8 +1102,8 @@ describe('bridge router: session routes', () => {
       },
     }
     const { server } = await boot(api)
-    await request(server, 'GET', '/session/s1')
-    await request(server, 'GET', '/session/s1/message?limit=100')
+    await request(server, 'GET', '/api/session/s1')
+    await request(server, 'GET', '/api/session/s1/message?limit=100')
     expect(historyCalls).toBe(1)
   })
 
@@ -1255,8 +1121,8 @@ describe('bridge router: session routes', () => {
       },
     }
     const { server } = await boot(api)
-    await request(server, 'GET', '/session/s1/message?limit=100')
-    await request(server, 'GET', '/session/s1')
+    await request(server, 'GET', '/api/session/s1/message?limit=100')
+    await request(server, 'GET', '/api/session/s1')
     expect(historyCalls).toBe(1)
   })
 
@@ -1278,22 +1144,22 @@ describe('bridge router: session routes', () => {
       },
     }
     const { server } = await boot(api)
-    const inFlight = request(server, 'GET', '/session')
+    const inFlight = request(server, 'GET', '/api/session')
     const listStarted = Date.now() + 2000
     while (listCalls === 0 && Date.now() < listStarted) {
       await new Promise((resolve) => setTimeout(resolve, 1))
     }
     expect(listCalls).toBe(1)
-    await request(server, 'POST', '/session/s1/message', {
+    await request(server, 'POST', '/api/session/s1/prompt', {
       parts: [{ type: 'text', text: 'hi' }],
     })
     const [first, second] = await Promise.all([
       inFlight,
-      request(server, 'GET', '/session'),
+      request(server, 'GET', '/api/session'),
     ])
     expect(listCalls).toBe(2)
-    expect((first.body as Array<{ id: string }>).at(0)?.id).toBe('s-stale')
-    expect((second.body as Array<{ id: string }>).at(0)?.id).toBe('s-fresh')
+    expect((first.body as { data: Array<{ id: string }> }).data.at(0)?.id).toBe('s-stale')
+    expect((second.body as { data: Array<{ id: string }> }).data.at(0)?.id).toBe('s-fresh')
   })
 
   it('serves the dsh skill catalog for the matching session', async () => {
@@ -1317,14 +1183,6 @@ describe('bridge router: session routes', () => {
     }
     const { server } = await boot(api)
 
-    const v1 = await request(server, 'GET', '/skill?directory=/work')
-    expect(v1.status).toBe(200)
-    expect(v1.body).toEqual([{
-      name: 'code-review',
-      description: 'Review code before merge',
-      whenToUse: 'Before merging',
-    }])
-
     const v2 = await request(server, 'GET', '/api/skill')
     expect(v2.status).toBe(200)
     expect(v2.body).toMatchObject({
@@ -1332,8 +1190,6 @@ describe('bridge router: session routes', () => {
       data: [{ name: 'code-review', description: 'Review code before merge' }],
     })
 
-    const commands = await request(server, 'GET', '/command')
-    expect((commands.body as Array<{ name: string }>).map((entry) => entry.name)).toContain('code-review')
     const v2Commands = await request(server, 'GET', '/api/command')
     expect((v2Commands.body as { data: Array<{ name: string }> }).data.map((entry) => entry.name))
       .toContain('code-review')
@@ -1358,11 +1214,11 @@ describe('bridge router: session routes', () => {
       },
     }
     const { server } = await boot(api)
-    const result = await request(server, 'POST', '/session/s1/command', {
-      command: 'code-review',
-      arguments: 'strict',
+    const result = await request(server, 'POST', '/api/session/s1/command', {
+      name: 'code-review',
+      text: 'strict',
     })
-    expect(result.status).toBe(200)
+    expect(result.status).toBe(204)
     expect(calls[0]).toMatchObject({
       method: 'session.prompt',
       payload: {
@@ -1425,17 +1281,16 @@ describe('bridge router: session routes', () => {
       liveEvents.push(...events)
       originalBroadcast(events as never)
     }
-    const result = await request(server, 'POST', '/session/s1/shell', {
+    const result = await request(server, 'POST', '/api/session/s1/shell', {
       agent: 'build',
-      model: { providerID: 'deepseek-official', modelID: 'mock-model' },
       command: 'printf shell-ok',
     })
-    expect(result.status).toBe(200)
+    expect(result.status).toBe(204)
     expect(injected).toHaveLength(1)
     expect(injected[0]).toMatchObject({
       role: 'user',
       source: {
-        kind: 'plugin',
+        kind: 'dsh-oc',
         plugin: 'dsh-oc',
         form: 'notice',
         summary: 'The user manually executed a shell command',
@@ -1452,34 +1307,20 @@ describe('bridge router: session routes', () => {
         target: 'next-step',
         inserted: [expect.objectContaining({
           role: 'user',
-          source: expect.objectContaining({ kind: 'plugin', plugin: 'dsh-oc', form: 'notice' }),
+          source: expect.objectContaining({ kind: 'dsh-oc', plugin: 'dsh-oc', form: 'notice' }),
         })],
       }),
     }))
-    expect(result.body).toMatchObject({
-      info: { role: 'assistant', parentID: expect.stringMatching(/^msg_shell:user:/) },
-      parts: [{ type: 'tool', tool: 'bash', state: { status: 'completed' } }],
-    })
     expect(liveEvents.filter((event) => event.payload.type === 'session.status')).toHaveLength(2)
     expect(liveEvents.filter((event) => event.payload.type === 'session.idle')).toHaveLength(1)
 
-    const history = await request(server, 'GET', '/session/s1/message')
-    const entries = history.body as Array<{
-      info: { id: string; role: string }
-      parts: Array<{ type: string; tool?: string; state?: { status?: string; output?: string } }>
-    }>
-    expect(entries).toHaveLength(2)
-    expect(entries[0]?.info).toMatchObject({ role: 'user' })
-    expect(entries[0]?.info.id).toMatch(/^msg_shell:user:/)
-    expect(entries[1]?.info).toMatchObject({ role: 'assistant' })
-    expect(entries[1]?.info.id).toMatch(/^msg_shell:/)
-    expect(entries[1]?.parts[0]).toMatchObject({
-      type: 'tool',
-      tool: 'bash',
-      state: { status: 'completed', output: 'shell-ok' },
-    })
     const v2 = await request(server, 'GET', '/api/session/s1/message')
-    const v2Messages = (v2.body as { data: Array<{ type?: string; content?: Array<{ type?: string; name?: string; state?: { status?: string } }> }> }).data
+    const v2Messages = (v2.body as V2Messages).data
+    expect(v2Messages).toHaveLength(2)
+    expect(v2Messages[0]?.type).toBe('user')
+    expect(v2Messages[0]?.id).toMatch(/^msg_shell:user:/)
+    expect(v2Messages[1]?.type).toBe('assistant')
+    expect(v2Messages[1]?.id).toMatch(/^msg_shell:/)
     const v2Assistant = v2Messages.find((message) => message.type === 'assistant' && message.content?.some((part) => part.type === 'tool'))
     expect(v2Assistant?.content?.[0]).toMatchObject({ type: 'tool', name: 'bash', state: { status: 'completed' } })
   })
@@ -1491,7 +1332,7 @@ describe('bridge router: session routes', () => {
       agents: { get: () => ({ id: 'live-s1' }) },
     }
     const { server } = await boot(api)
-    const result = await request(server, 'POST', '/session/s1/shell', { agent: 'build', command: 'id' })
+    const result = await request(server, 'POST', '/api/session/s1/shell', { agent: 'build', command: 'id' })
     expect(result.status).toBe(500)
     expect(result.body).toMatchObject({ name: 'InternalServerError', message: expect.stringContaining('runMaintenance') })
   })
@@ -1519,11 +1360,11 @@ describe('bridge router: session routes', () => {
       'printf \'%090000d\' 0 >&2',
     ].join('; ')
     expect(Buffer.byteLength(command, 'utf8')).toBeGreaterThan(16 * 1024)
-    const result = await request(server, 'POST', '/session/s1/shell', {
+    const result = await request(server, 'POST', '/api/session/s1/shell', {
       agent: 'build',
       command,
     })
-    expect(result.status).toBe(200)
+    expect(result.status).toBe(204)
     expect(injected).toHaveLength(1)
     const context = injected[0]?.content[0]?.text ?? ''
     expect(Buffer.byteLength(context, 'utf8')).toBeLessThanOrEqual(144 * 1024)
@@ -1531,8 +1372,11 @@ describe('bridge router: session routes', () => {
     expect(context).toContain('[stdout truncated for model context after 65536 UTF-8 bytes]')
     expect(context).toContain('[stderr truncated for model context after 65536 UTF-8 bytes]')
 
-    const history = await request(server, 'GET', '/session/s1/message')
-    const output = (history.body as Array<{ parts: Array<{ state?: { output?: string } }> }>)[1]?.parts[0]?.state?.output ?? ''
+    const history = await request(server, 'GET', '/api/session/s1/message')
+    const output = (history.body as V2Messages).data
+      .flatMap((message) => message.content ?? [])
+      .map((part) => part.state?.content?.map((item) => item.text ?? '').join('') ?? '')
+      .join('')
     expect(output).toContain('shell-budget-ok')
     expect(Buffer.byteLength(output, 'utf8')).toBeGreaterThan(128 * 1024)
   })
@@ -1550,11 +1394,11 @@ describe('bridge router: session routes', () => {
       },
     }
     const { server } = await boot(api, process.cwd())
-    const result = await request(server, 'POST', '/session/s1/shell', {
+    const result = await request(server, 'POST', '/api/session/s1/shell', {
       agent: 'build',
       command: 'yes O | head -c 90000; yes E | head -c 90000 >&2; exit 7',
     })
-    expect(result.status).toBe(200)
+    expect(result.status).toBe(204)
     const context = injected[0]?.content[0]?.text ?? ''
     expect(Buffer.byteLength(context, 'utf8')).toBeLessThanOrEqual(144 * 1024)
     expect(context).toContain('Source: user manually executed this command; it was not a model-requested tool call.')
@@ -1576,13 +1420,16 @@ describe('bridge router: session routes', () => {
       },
     }
     const { server } = await boot(api, process.cwd())
-    const result = await request(server, 'POST', '/session/s1/shell', {
+    const result = await request(server, 'POST', '/api/session/s1/shell', {
       agent: 'build',
       command: 'printf context-injection-warning',
     })
-    expect(result.status).toBe(200)
-    const history = await request(server, 'GET', '/session/s1/message')
-    const output = (history.body as Array<{ parts: Array<{ state?: { output?: string } }> }>)[1]?.parts[0]?.state?.output ?? ''
+    expect(result.status).toBe(204)
+    const history = await request(server, 'GET', '/api/session/s1/message')
+    const output = (history.body as V2Messages).data
+      .flatMap((message) => message.content ?? [])
+      .map((part) => part.state?.content?.map((item) => item.text ?? '').join('') ?? '')
+      .join('')
     expect(output).toContain('context-injection-warning')
     const warning = output.split('\n').find((line) => line.startsWith('[dsh-oc]'))
     expect(warning).toContain('[dsh-oc] shell command/output was not added to model context: inbox unavailable')
@@ -1611,8 +1458,8 @@ describe('bridge router: session routes', () => {
       },
     }
     const { server } = await boot(api)
-    const result = await request(server, 'POST', '/session/s1/shell', { agent: 'build', command: 'printf cold-shell-ok' })
-    expect(result.status).toBe(200)
+    const result = await request(server, 'POST', '/api/session/s1/shell', { agent: 'build', command: 'printf cold-shell-ok' })
+    expect(result.status).toBe(204)
   })
 
   it('rejects a concurrent shell on the same Agent before spawning a second child', async () => {
@@ -1636,11 +1483,11 @@ describe('bridge router: session routes', () => {
       },
     }
     const { server } = await boot(api, process.cwd())
-    const first = request(server, 'POST', '/session/s1/shell', { agent: 'build', command: 'sleep 0.2' })
+    const first = request(server, 'POST', '/api/session/s1/shell', { agent: 'build', command: 'sleep 0.2' })
     await new Promise((resolve) => setTimeout(resolve, 20))
-    const second = await request(server, 'POST', '/session/s1/shell', { agent: 'build', command: 'printf second' })
+    const second = await request(server, 'POST', '/api/session/s1/shell', { agent: 'build', command: 'printf second' })
     expect(second.status).toBe(409)
-    expect((await first).status).toBe(200)
+    expect((await first).status).toBe(204)
   })
 
   it('maps shell body and missing-session failures to actionable HTTP errors', async () => {
@@ -1650,12 +1497,12 @@ describe('bridge router: session routes', () => {
       resolveAgent: async () => errRpc('session-not-found', 'session missing'),
     }
     const missingServer = await boot(missing)
-    expect((await request(missingServer.server, 'POST', '/session/s1/shell', { agent: 'build', command: 'id' })).status)
+    expect((await request(missingServer.server, 'POST', '/api/session/s1/shell', { agent: 'build', command: 'id' })).status)
       .toBe(404)
 
     const { server } = await boot(fakeApi())
-    expect((await request(server, 'POST', '/session/s1/shell', { command: 'id' })).status).toBe(400)
-    expect((await request(server, 'POST', '/session/s1/shell', { agent: '   ', command: 'id' })).status).toBe(400)
+    expect((await request(server, 'POST', '/api/session/s1/shell', { command: 'id' })).status).toBe(400)
+    expect((await request(server, 'POST', '/api/session/s1/shell', { agent: '   ', command: 'id' })).status).toBe(400)
   })
 
   it('keeps stderr/exit text and aborts only the owned shell process', async () => {
@@ -1670,34 +1517,29 @@ describe('bridge router: session routes', () => {
       },
     }
     const { server } = await boot(api, process.cwd())
-    const failed = await request(server, 'POST', '/session/s1/shell', {
+    const failed = await request(server, 'POST', '/api/session/s1/shell', {
       agent: 'build',
       command: 'printf shell-stderr >&2; exit 7',
     })
-    expect(failed.status).toBe(200)
-    const failedHistory = await request(server, 'GET', '/session/s1/message')
-    const failedPart = (failedHistory.body as Array<{ parts: Array<{ state?: { output?: string } }> }>)[1]?.parts[0]
-    expect(failedPart?.state?.output).toContain('shell-stderr')
-    expect(failedPart?.state?.output).toContain('[exit code: 7]')
-
-    const pending = request(server, 'POST', '/session/s1/shell', { agent: 'build', command: 'sleep 10' })
-    await new Promise((resolve) => setTimeout(resolve, 80))
-    const aborted = await request(server, 'POST', '/session/s1/abort')
-    expect(aborted.status).toBe(200)
-    expect((await pending).status).toBe(200)
-    const abortedHistory = await request(server, 'GET', '/session/s1/message')
-    const abortedEntries = abortedHistory.body as Array<{
-      parts: Array<{ state?: { status?: string; output?: string; metadata?: { output?: string } } }>
-    }>
-    const abortedPart = abortedEntries.at(-1)?.parts[0]
-    expect(abortedPart?.state?.status).toBe('completed')
-    expect(abortedPart?.state?.output).toContain('User aborted the command')
+    expect(failed.status).toBe(204)
     const v2 = await request(server, 'GET', '/api/session/s1/message')
-    const v2Data = (v2.body as { data: Array<{ type?: string; content?: Array<{ type?: string; name?: string; state?: { status?: string; content?: Array<{ text?: string }> } }> }> }).data
-    const v2Shell = v2Data.findLast((message) => message.type === 'assistant'
+    const v2Data = (v2.body as V2Messages).data
+    const failedShell = v2Data.findLast((message) => message.type === 'assistant'
+      && message.content?.some((part) => part.type === 'tool'
+        && part.state?.content?.some((item) => String(item.text ?? '').includes('shell-stderr'))))
+    expect(failedShell?.content?.[0]?.state?.content?.[0]?.text).toContain('[exit code: 7]')
+
+    const pending = request(server, 'POST', '/api/session/s1/shell', { agent: 'build', command: 'sleep 10' })
+    await new Promise((resolve) => setTimeout(resolve, 80))
+    const aborted = await request(server, 'POST', '/api/session/s1/interrupt')
+    expect(aborted.status).toBe(200)
+    expect((await pending).status).toBe(204)
+    const abortedHistory = await request(server, 'GET', '/api/session/s1/message')
+    const abortedData = (abortedHistory.body as V2Messages).data
+    const abortedShell = abortedData.findLast((message) => message.type === 'assistant'
       && message.content?.some((part) => part.type === 'tool'
         && part.state?.content?.some((item) => String(item.text ?? '').includes('User aborted the command'))))
-    expect(v2Shell?.content?.[0]).toMatchObject({
+    expect(abortedShell?.content?.[0]).toMatchObject({
       type: 'tool',
       name: 'bash',
       state: { status: 'completed', content: [{ text: expect.stringContaining('User aborted the command') }] },
@@ -1716,16 +1558,19 @@ describe('bridge router: session routes', () => {
       },
     }
     const { server } = await boot(api, process.cwd())
-    const result = await request(server, 'POST', '/session/s1/shell', {
+    const result = await request(server, 'POST', '/api/session/s1/shell', {
       agent: 'build',
       command: 'yes A | head -c 1200000',
     })
-    expect(result.status).toBe(200)
-    const history = await request(server, 'GET', '/session/s1/message')
-    const part = (history.body as Array<{ parts: Array<{ state?: { status?: string; output?: string } }> }>)[1]?.parts[0]
+    expect(result.status).toBe(204)
+    const history = await request(server, 'GET', '/api/session/s1/message')
+    const part = (history.body as V2Messages).data
+      .flatMap((message) => message.content ?? [])
+      .find((entry) => entry.type === 'tool')
     expect(part?.state?.status).toBe('completed')
-    expect(part?.state?.output).toContain('[stdout truncated after 1048576 bytes]')
-    expect((part?.state?.output?.length ?? 0)).toBeLessThan(1_100_000)
+    const output = part?.state?.content?.map((item) => item.text ?? '').join('') ?? ''
+    expect(output).toContain('[stdout truncated after 1048576 bytes]')
+    expect(output.length).toBeLessThan(1_100_000)
   })
 
   it('aborts and forgets an owned shell when the host removes its session', async () => {
@@ -1741,19 +1586,19 @@ describe('bridge router: session routes', () => {
       },
     }
     const { server, router } = await boot(api, process.cwd())
-    const pending = request(server, 'POST', '/session/s1/shell', { agent: 'build', command: 'sleep 10' })
+    const pending = request(server, 'POST', '/api/session/s1/shell', { agent: 'build', command: 'sleep 10' })
     await new Promise((resolve) => setTimeout(resolve, 80))
     router.feedHostFrame({ type: 'host/session-removed', sessionId: 's1' })
-    expect((await pending).status).toBe(200)
+    expect((await pending).status).toBe(204)
     expect(injected).toHaveLength(0)
     await new Promise((resolve) => setTimeout(resolve, 20))
-    const history = await request(server, 'GET', '/session/s1/message')
-    expect(history.body).toEqual([])
+    const history = await request(server, 'GET', '/api/session/s1/message')
+    expect((history.body as { data: unknown[] }).data).toEqual([])
   })
 
   it('returns an empty skill catalog without sessions', async () => {
     const { server } = await boot(fakeApi())
-    expect((await request(server, 'GET', '/skill')).body).toEqual([])
+    expect((await request(server, 'GET', '/api/skill')).body).toMatchObject({ data: [] })
   })
 
   it('injects fake skills for e2e when DSH_OC_E2E_FAKE_SKILLS is set', async () => {
@@ -1766,13 +1611,13 @@ describe('bridge router: session routes', () => {
         sessionController: { ...base.sessionController, list: async () => okRpc({ items: [item] }) },
       }
       const { server } = await boot(api)
-      const v1 = await request(server, 'GET', '/skill')
-      expect((v1.body as Array<{ name: string }>).map((skill) => skill.name)).toEqual([
+      const v2 = await request(server, 'GET', '/api/skill')
+      expect((v2.body as { data: Array<{ name: string }> }).data.map((skill) => skill.name)).toEqual([
         'code-review',
         'smoke',
       ])
-      const commands = await request(server, 'GET', '/command')
-      expect((commands.body as Array<{ name: string }>).map((command) => command.name)).toContain('code-review')
+      const commands = await request(server, 'GET', '/api/command')
+      expect((commands.body as { data: Array<{ name: string }> }).data.map((command) => command.name)).toContain('code-review')
     } finally {
       if (previous === undefined) {
         delete process.env.DSH_OC_E2E_FAKE_SKILLS
@@ -1865,6 +1710,7 @@ describe('bridge router: session routes', () => {
       updatedAt: 3000,
       running: false,
       blank: false,
+    agentAvailable: false,
       cwd: '/work',
     }
     const child = {
@@ -1872,6 +1718,7 @@ describe('bridge router: session routes', () => {
       updatedAt: 2000,
       running: true,
       blank: false,
+    agentAvailable: false,
       parentSessionId: 'parent-1' as never,
       origin: 'subagent' as const,
       cwd: undefined,
@@ -1882,7 +1729,7 @@ describe('bridge router: session routes', () => {
       sessionController: { ...base.sessionController, list: async () => okRpc({ items: [child, parent] }) },
     }
     const { server, router } = await boot(api)
-    const v1 = await request(server, 'GET', '/session')
+    const v1 = await request(server, 'GET', '/experimental/session')
     expect(v1.status).toBe(200)
     expect((v1.body as Array<{ id: string; parentID?: string; metadata?: unknown; directory: string }>)[0])
       .toMatchObject({
@@ -1906,14 +1753,6 @@ describe('bridge router: session routes', () => {
         { id: 'parent-1' },
       ],
     })
-    const children = await request(server, 'GET', '/session/parent-1/children')
-    expect(children.status).toBe(200)
-    expect(children.body).toMatchObject([
-      { id: 'child-1', parentID: 'parent-1', metadata: { origin: 'subagent' } },
-    ])
-    const noChildren = await request(server, 'GET', '/session/missing/children')
-    expect(noChildren.status).toBe(200)
-    expect(noChildren.body).toEqual([])
     const experimental = await request(server, 'GET', '/experimental/session')
     expect(experimental.status).toBe(200)
     expect(experimental.body).toMatchObject([
@@ -1934,6 +1773,7 @@ describe('bridge router: session routes', () => {
             updatedAt: 2000,
             running: false,
             blank: false,
+    agentAvailable: false,
             cwd: '/work',
             agentPreset: 'minimal',
           }],
@@ -1951,15 +1791,13 @@ describe('bridge router: session routes', () => {
     // dsh summaries carry `agentPreset`, not a TUI `agent` name; the list
     // must seed the per-session label so first replies do not fall back to
     // the hardcoded build agent.
-    await request(server, 'GET', '/session')
+    await request(server, 'GET', '/api/session')
     expect(router.ctx.state.sessionAgentFor('s1')).toBe('minimal')
-    const messages = await request(server, 'GET', '/session/s1/message')
-    const entries = messages.body as Array<{ info: { role: string; agent: string; mode?: string } }>
-    const assistant = entries.find((entry) => entry.info.role === 'assistant')
-    expect(assistant?.info.agent).toBe('minimal')
-    // The TUI badge renders message.mode, so it must follow the preset too.
-    expect(assistant?.info.mode).toBe('minimal')
-    expect(entries.find((entry) => entry.info.role === 'user')?.info.agent).toBe('minimal')
+    const messages = await request(server, 'GET', '/api/session/s1/message')
+    const entries = (messages.body as { data: Array<{ type: string; agent?: string }> }).data
+    const assistant = entries.find((entry) => entry.type === 'assistant')
+    expect(assistant?.agent).toBe('minimal')
+    expect(entries.find((entry) => entry.type === 'user')?.agent).toBe('minimal')
   })
 
   it('tags a created session with its resolved agent before the first reply', async () => {
@@ -1980,7 +1818,7 @@ describe('bridge router: session routes', () => {
       },
     }
     const { server, router } = await boot(api)
-    await request(server, 'POST', '/session', { agent: 'minimal', directory: '/work' })
+    await request(server, 'POST', '/api/session', { agent: 'minimal', location: { directory: '/work' } })
     expect(router.ctx.state.sessionAgentFor('fresh-1')).toBe('minimal')
   })
 
@@ -1989,17 +1827,25 @@ describe('bridge router: session routes', () => {
     const events = hostSessionAddedEvents(router.ctx, {
       sessionId: 'child-1',
       blank: true,
+    agentAvailable: false,
       cwd: '/work',
       origin: 'subagent',
       parentSessionId: 'parent-1',
       agentPreset: 'minimal',
     })
-    expect(events).toHaveLength(1)
+    expect(events).toHaveLength(2)
     expect(events[0]?.payload.type).toBe('session.updated')
     expect(events[0]?.payload.properties.info).toMatchObject({
       id: 'child-1',
       parentID: 'parent-1',
       metadata: { origin: 'subagent' },
+      agent: 'minimal',
+    })
+    // The 2.x vocabulary announces the session with a record of its own.
+    expect(events[1]?.payload.type).toBe('session.created')
+    expect(events[1]?.payload.data).toMatchObject({
+      sessionID: 'child-1',
+      parentID: 'parent-1',
       agent: 'minimal',
     })
     expect(router.ctx.state.sessionParents.get('child-1')).toBe('parent-1')
@@ -2028,7 +1874,7 @@ describe('bridge router: session routes', () => {
   it('pushes host/session-added subagent children over the SSE stream', async () => {
     const { server, router } = await boot(fakeApi())
     const controller = new AbortController()
-    const response = await fetch(server.url + '/global/event', { signal: controller.signal })
+    const response = await fetch(server.url + '/api/event', { signal: controller.signal })
     const reader = response.body!.getReader()
     const decoder = new TextDecoder()
     let text = ''
@@ -2039,6 +1885,7 @@ describe('bridge router: session routes', () => {
       type: 'host/session-added',
       sessionId: 'child-1',
       blank: true,
+    agentAvailable: false,
       cwd: '/work',
       origin: 'subagent',
       parentSessionId: 'parent-1',
@@ -2062,6 +1909,7 @@ describe('bridge router: session routes', () => {
       updatedAt: 5000,
       running: false,
       blank: false,
+    agentAvailable: false,
       cwd: '/work',
     }
     const child = {
@@ -2069,11 +1917,11 @@ describe('bridge router: session routes', () => {
       updatedAt: 4000,
       running: false,
       blank: false,
+    agentAvailable: false,
       parentSessionId: 'parent-task-history' as never,
       origin: 'subagent' as const,
       cwd: '/work',
-      projections: {
-        asOfSeq: 7,
+      projections: { kind: 'sequenced' as 'sequenced', asOfSeq: 7,
         values: {
           subagent: { mode: 'one-shot', label: 'Inspect history' },
           title: 'Inspect history child',
@@ -2123,27 +1971,6 @@ describe('bridge router: session routes', () => {
     }
     const { server } = await boot(api)
 
-    const v1 = await request(server, 'GET', '/session/parent-task-history/message')
-    const v1Parts = (v1.body as Array<{ parts: Array<Record<string, unknown>> }> )
-      .flatMap((entry) => entry.parts)
-    const v1Task = v1Parts.find((part) => part.type === 'tool')
-    expect(v1Task).toMatchObject({
-      tool: 'task',
-      state: {
-        status: 'completed',
-        input: {
-          description: 'Inspect history',
-          prompt: 'Read the historical session',
-          subagent_type: 'spawn',
-        },
-        metadata: {
-          sessionId: 'child-task-history',
-          parentSessionId: 'parent-task-history',
-          mode: 'one-shot',
-        },
-      },
-    })
-
     const v2 = await request(server, 'GET', '/api/session/parent-task-history/message')
     const v2Task = (v2.body as { data: Array<{ content?: Array<Record<string, unknown>> }> }).data
       .flatMap((entry) => entry.content ?? [])
@@ -2157,7 +1984,7 @@ describe('bridge router: session routes', () => {
           prompt: 'Read the historical session',
           subagent_type: 'spawn',
         },
-        structured: { sessionId: 'child-task-history', parentSessionId: 'parent-task-history' },
+        metadata: { sessionId: 'child-task-history', parentSessionId: 'parent-task-history' },
       },
     })
   })
@@ -2168,6 +1995,7 @@ describe('bridge router: session routes', () => {
       updatedAt: 5000,
       running: false,
       blank: false,
+    agentAvailable: false,
       cwd: '/work',
     }
     // Deliberately omit labels so the resolver must use durable child order;
@@ -2177,11 +2005,11 @@ describe('bridge router: session routes', () => {
       updatedAt: 4000,
       running: false,
       blank: false,
+    agentAvailable: false,
       parentSessionId: 'parent-task-fifo' as never,
       origin: 'subagent' as const,
       cwd: '/work',
-      projections: {
-        asOfSeq: 7,
+      projections: { kind: 'sequenced' as 'sequenced', asOfSeq: 7,
         values: { subagent: { mode: 'one-shot' } },
       },
     }
@@ -2190,11 +2018,11 @@ describe('bridge router: session routes', () => {
       updatedAt: 3900,
       running: false,
       blank: false,
+    agentAvailable: false,
       parentSessionId: 'parent-task-fifo' as never,
       origin: 'subagent' as const,
       cwd: '/work',
-      projections: {
-        asOfSeq: 8,
+      projections: { kind: 'sequenced' as 'sequenced', asOfSeq: 8,
         values: { subagent: { mode: 'continuable' } },
       },
     }
@@ -2261,19 +2089,11 @@ describe('bridge router: session routes', () => {
     }
     const { server, router } = await boot(api)
 
-    const v1 = await request(server, 'GET', '/session/parent-task-fifo/message')
-    const v1Tasks = (v1.body as Array<{ parts: Array<Record<string, unknown>> }>).flatMap((entry) => entry.parts)
-      .filter((part) => part.type === 'tool' && part.tool === 'task')
-    expect(v1Tasks.map((part) => (part.state as { metadata?: { sessionId?: string } }).metadata?.sessionId))
-      .toEqual(['child-fifo-a', 'child-fifo-b'])
-    expect(new Set(v1Tasks.map((part) => (part.state as { metadata?: { sessionId?: string } }).metadata?.sessionId)).size)
-      .toBe(2)
-
     const v2 = await request(server, 'GET', '/api/session/parent-task-fifo/message')
     const v2Tasks = (v2.body as { data: Array<{ content?: Array<Record<string, unknown>> }> }).data
       .flatMap((entry) => entry.content ?? [])
       .filter((part) => part.type === 'tool' && part.name === 'task')
-    expect(v2Tasks.map((part) => (part.state as { structured?: { sessionId?: string } }).structured?.sessionId))
+    expect(v2Tasks.map((part) => (part.state as { metadata?: { sessionId?: string } }).metadata?.sessionId))
       .toEqual(['child-fifo-a', 'child-fifo-b'])
     expect(router.ctx.state.subagentChildForCall('parent-task-fifo', 'fifo-call-a')?.sessionId)
       .toBe('child-fifo-a')
@@ -2281,7 +2101,7 @@ describe('bridge router: session routes', () => {
       .toBe('child-fifo-b')
   })
 
-  it('gets a session and its messages for v1 and v2', async () => {
+  it('gets a session and its messages for v2', async () => {
     const base = fakeApi()
     const history = [makeUserEvent('hello'), makeAssistantEvent([{ type: 'text', text: 'hi back' }])]
     const api = {
@@ -2293,22 +2113,9 @@ describe('bridge router: session routes', () => {
       },
     }
     const { server } = await boot(api)
-    const session = await request(server, 'GET', '/session/s1')
+    const session = await request(server, 'GET', '/api/session/s1')
     expect(session.status).toBe(200)
-    expect((session.body as { id: string }).id).toBe('s1')
-    const init = await request(server, 'POST', '/session/s1/init')
-    expect(init.status).toBe(200)
-    expect(init.body).toBe(true)
-    const messages = await request(server, 'GET', '/session/s1/message')
-    expect(messages.status).toBe(200)
-    expect(messages.body).toHaveLength(2)
-    const firstID = (messages.body as Array<{ info: { id: string } }>)[0]?.info.id
-    expect(firstID).toBeDefined()
-    const single = await request(server, 'GET', `/session/s1/message/${firstID}`)
-    expect(single.status).toBe(200)
-    expect((single.body as { info: { id: string } }).info.id).toBe(firstID)
-    const missing = await request(server, 'GET', '/session/s1/message/nope')
-    expect(missing.status).toBe(404)
+    expect((session.body as { data: { id: string } }).data.id).toBe('s1')
     const v2Messages = await request(server, 'GET', '/api/session/s1/message')
     expect(v2Messages.status).toBe(200)
     expect(v2Messages.body).toMatchObject({ data: [{ type: 'user' }, { type: 'assistant' }], cursor: {} })
@@ -2338,11 +2145,6 @@ describe('bridge router: session routes', () => {
       },
     }
     const { server, router } = await boot(api)
-
-    const v1 = await request(server, 'GET', '/session/s1/message')
-    expect((v1.body as Array<{ info: { role: string; time: { created: number } } }>).map((entry) => entry.info.role))
-      .toEqual(['user', 'assistant'])
-    expect((v1.body as Array<{ info: { time: { created: number } } }>)[1]?.info.time.created).toBe(1011)
 
     const v2 = await request(server, 'GET', '/api/session/s1/message')
     expect((v2.body as { data: Array<{ type: string }> }).data.map((entry) => entry.type))
@@ -2374,14 +2176,6 @@ describe('bridge router: session routes', () => {
       } as never],
     })
 
-    const mergedV1 = await request(server, 'GET', '/session/s1/message')
-    expect((mergedV1.body as Array<{ info: { id: string; role: string } }>).map((entry) => [entry.info.id, entry.info.role]))
-      .toEqual([
-        ['m-user-order', 'user'],
-        ['m-assistant-order', 'assistant'],
-        ['msg_cmd:order-check', 'assistant'],
-      ])
-
     const mergedV2 = await request(server, 'GET', '/api/session/s1/message')
     const mergedV2Data = (mergedV2.body as {
       data: Array<{ id: string; type: string; time?: { created?: number; completed?: number } }>
@@ -2399,7 +2193,7 @@ describe('bridge router: session routes', () => {
       .toMatchObject({ created: 1100, completed: 1100 })
   })
 
-  it('hydrates v1/v2 history with the immutable optimistic message keys', async () => {
+  it('hydrates v2 history with the immutable optimistic message keys', async () => {
     const base = fakeApi()
     const history = [
       { event: sessionEvent('turn/start', { turn: 1 }, 1, 1000) },
@@ -2422,14 +2216,6 @@ describe('bridge router: session routes', () => {
     // durable user row arrives.
     router.ctx.state.setAssistantMessageCreatedAt('s1', 'prompt-assistant-order', 1000)
 
-    const v1 = await request(server, 'GET', '/session/s1/message')
-    const v1Body = v1.body as Array<{ info: { id: string; role: string; time: { created: number } } }>
-    const v1User = v1Body.find((entry) => entry.info.role === 'user')
-    const v1Assistant = v1Body
-      .find((entry) => entry.info.role === 'assistant')
-    expect(v1User?.info).toMatchObject({ id: 'prompt-user-order', time: { created: 990 } })
-    expect(v1Assistant?.info).toMatchObject({ id: 'prompt-assistant-order', time: { created: 1000 } })
-
     const v2 = await request(server, 'GET', '/api/session/s1/message')
     const v2Body = (v2.body as { data: Array<{ id: string; type: string; time: { created: number } }> }).data
     const v2User = v2Body.find((entry) => entry.type === 'user')
@@ -2447,6 +2233,7 @@ describe('bridge router: session routes', () => {
       updatedAt: 1,
       running: false,
       blank: true,
+    agentAvailable: false,
       cwd: '/work',
       projections: undefined,
     }
@@ -2467,7 +2254,7 @@ describe('bridge router: session routes', () => {
                   cursor: 0,
                   records: [],
                   hasMore: false,
-                  projections: { asOfSeq: 0, values: {} },
+                  projections: { kind: 'sequenced' as 'sequenced', asOfSeq: 0, values: {} },
                 },
               }),
               return: async () => {
@@ -2480,7 +2267,7 @@ describe('bridge router: session routes', () => {
       },
     }
     const { server } = await boot(api)
-    const response = await request(server, 'GET', '/session/s-follow')
+    const response = await request(server, 'GET', '/api/session/s-follow')
     expect(response.status).toBe(200)
     expect(returned).toBe(true)
   })
@@ -2503,7 +2290,7 @@ describe('bridge router: session routes', () => {
                 cursor: -1,
                 records: [],
                 hasMore: false,
-                projections: { asOfSeq: -1, values: {} },
+                projections: { kind: 'sequenced' as 'sequenced', asOfSeq: -1, values: {} },
               }
             },
           } as never
@@ -2516,11 +2303,12 @@ describe('bridge router: session routes', () => {
       updatedAt: 1,
       running: false,
       blank: false,
+    agentAvailable: false,
       origin: 'subagent',
       parentSessionId: 'parent-1' as never,
-      projections: { asOfSeq: 0, values: { subagent: { mode: 'one-shot' } } } as never,
+      projections: { kind: 'sequenced' as 'sequenced', asOfSeq: 0, values: { subagent: { mode: 'one-shot' } } } as never,
     }])
-    const result = await request(server, 'GET', '/session/child-1/message')
+    const result = await request(server, 'GET', '/api/session/child-1/message')
     expect(result.status).toBe(200)
     expect(address).toEqual({
       kind: 'subagent',
@@ -2542,7 +2330,7 @@ describe('bridge router: session routes', () => {
           async *[Symbol.asyncIterator]() {
             yield {
               type: 'snapshot', header: {}, cursor: 5, records: [], hasMore: true,
-              projections: { asOfSeq: 5, values: {} },
+              projections: { kind: 'sequenced' as 'sequenced', asOfSeq: 5, values: {} },
             }
           },
         } as never),
@@ -2570,6 +2358,7 @@ describe('bridge router: session routes', () => {
           updatedAt: Date.now(),
           running: true,
           blank: false,
+    agentAvailable: false,
         }] }),
       },
     }
@@ -2577,7 +2366,7 @@ describe('bridge router: session routes', () => {
     const empty = await request(server, 'GET', '/api/session/active')
     expect(empty.status).toBe(200)
     expect(empty.body).toEqual({ data: {} })
-    await request(server, 'POST', '/session', {})
+    await request(server, 'POST', '/api/session', {})
     const active = await request(server, 'GET', '/api/session/active')
     expect(active.status).toBe(200)
     expect(active.body).toEqual({ data: { 'new-session': { type: 'running' } } })
@@ -2595,6 +2384,7 @@ describe('bridge router: session routes', () => {
           updatedAt: Date.now(),
           running: states.shift()?.running ?? false,
           blank: false,
+    agentAvailable: false,
         }] }),
       },
     }
@@ -2625,11 +2415,11 @@ describe('bridge router: session routes', () => {
       },
     }
     const { server } = await boot(api)
-    const messages = await request(server, 'GET', '/session/s1/message')
+    const messages = await request(server, 'GET', '/api/session/s1/message')
     expect(messages.status).toBe(200)
-    expect((messages.body as Array<{ info: { role: string; model?: unknown } }>)[0]?.info).toMatchObject({
-      role: 'user',
-      model: { providerID: 'deepseek', modelID: 'mock-model' },
+    expect((messages.body as { data: Array<{ type: string; model?: unknown }> }).data[0]).toMatchObject({
+      type: 'user',
+      model: { providerID: 'deepseek', id: 'mock-model' },
     })
   })
 
@@ -2665,11 +2455,11 @@ describe('bridge router: session routes', () => {
       },
     }
     const { server } = await boot(api)
-    const v1 = await request(server, 'GET', '/session/s1/message')
+    const v1 = await request(server, 'GET', '/api/session/s1/message')
     expect(v1.status).toBe(200)
-    expect((v1.body as Array<{ info: { role: string; model?: unknown } }>)[0]?.info).toMatchObject({
-      role: 'user',
-      model: { providerID: 'deepseek', modelID: 'deepseek-v4-pro' },
+    expect((v1.body as { data: Array<{ type: string; model?: unknown }> }).data[0]).toMatchObject({
+      type: 'user',
+      model: { providerID: 'deepseek', id: 'deepseek-v4-pro' },
     })
   })
 
@@ -2717,7 +2507,7 @@ describe('bridge router: session routes', () => {
       originalBroadcast(events as never)
     }
 
-    const prompted = await request(server, 'POST', '/session/s1/message', {
+    const prompted = await request(server, 'POST', '/api/session/s1/prompt', {
       model: { providerID: 'deepseek', modelID: 'deepseek-v4-pro' },
       parts: [{ type: 'text', text: 'hello' }],
     })
@@ -2738,7 +2528,7 @@ describe('bridge router: session routes', () => {
         prompt: async () => okRpc({ accepted: true }),
       },
     })
-    const prompted = await request(server, 'POST', '/session/s1/message', {
+    const prompted = await request(server, 'POST', '/api/session/s1/prompt', {
       parts: [{ type: 'text', text: 'cold attach prompt' }],
     })
     expect(prompted.status).toBe(200)
@@ -2757,7 +2547,7 @@ describe('bridge router: session routes', () => {
     router.ctx.hub.remove(client)
   })
 
-  it('creates sessions (v1), forks from parentID, and creates v2 sessions', async () => {
+  it('creates sessions, forks from parentID, and creates v2 sessions', async () => {
     const base = fakeApi()
     const calls: Array<{ method: string; payload: unknown }> = []
     let forkCreated = false
@@ -2766,10 +2556,10 @@ describe('bridge router: session routes', () => {
       updatedAt: 3000,
       running: false,
       blank: false,
+    agentAvailable: false,
       parentSessionId: 's1' as never,
       cwd: '/work',
-      projections: {
-        asOfSeq: 0,
+      projections: { kind: 'sequenced' as 'sequenced', asOfSeq: 0,
         values: { title: 'Session One (fork #1)' } as never,
       },
     }
@@ -2795,17 +2585,19 @@ describe('bridge router: session routes', () => {
       },
     }
     const { server } = await boot(api)
-    const created = await request(server, 'POST', '/session', { title: 'New' })
+    const created = await request(server, 'POST', '/api/session', { title: 'New' })
     expect(created.status).toBe(200)
-    expect((created.body as { id: string }).id).toBe('new-session')
+    expect((created.body as { data: { id: string } }).data.id).toBe('new-session')
     expect(calls[0]).toMatchObject({ method: 'session.create', payload: { cwd: '/work' } })
-    const forkedBody = await request(server, 'POST', '/session', { parentID: 's1' })
+    const forkedBody = await request(server, 'POST', '/api/session', { parentID: 's1' })
     expect(forkedBody.status).toBe(200)
     expect(forkedBody.body).toMatchObject({
-      id: 'fork-session',
-      title: 'Session One (fork #1)',
+      data: {
+        id: 'fork-session',
+        title: 'Session One (fork #1)',
+      },
     })
-    expect((forkedBody.body as { parentID?: string }).parentID).toBeUndefined()
+    expect((forkedBody.body as { data: { parentID?: string } }).data.parentID).toBeUndefined()
     expect(calls[1]).toMatchObject({ method: 'session.rename', payload: { sessionId: 'new-session', title: 'New' } })
     expect(calls[2]).toMatchObject({ method: 'session.fork', payload: { sessionId: 's1' } })
     expect(calls[3]).toMatchObject({
@@ -2818,7 +2610,7 @@ describe('bridge router: session routes', () => {
     expect(calls[4]).toMatchObject({ method: 'session.create', payload: { cwd: '/tmp', sessionId: 'x1' } })
   })
 
-  it('forks through the opencode route and maps messageID to the dsh atSeq', async () => {
+  it('forks through the opencode route and cuts before the named message', async () => {
     const base = fakeApi()
     const calls: Array<{ method: string; payload: unknown }> = []
     const children: Array<{
@@ -2826,15 +2618,17 @@ describe('bridge router: session routes', () => {
       updatedAt: number
       running: boolean
       blank: boolean
+      agentAvailable: boolean
       parentSessionId: never
       cwd: string
-      projections: { asOfSeq: number; values: never }
+      projections: { kind: 'sequenced', asOfSeq: number; values: never }
     }> = []
     const childBase = {
       sessionId: 'fork-session' as never,
       updatedAt: 3000,
       running: false,
       blank: false,
+    agentAvailable: false,
       parentSessionId: 's1' as never,
       cwd: '/work',
     }
@@ -2846,8 +2640,7 @@ describe('bridge router: session routes', () => {
           calls.push({ method: 'session.fork', payload: request })
           children.push({
             ...childBase,
-            projections: {
-              asOfSeq: 0,
+            projections: { kind: 'sequenced' as 'sequenced', asOfSeq: 0,
               values: { title: `Session One (fork #${children.length + 1})` } as never,
             },
           })
@@ -2865,24 +2658,27 @@ describe('bridge router: session routes', () => {
       },
     }
     const { server } = await boot(api)
-    const noMessage = await request(server, 'POST', '/session/s1/fork')
+    const noMessage = await request(server, 'POST', '/api/session/s1/fork')
     expect(noMessage.status).toBe(200)
-    expect((noMessage.body as { id: string; parentID?: string }).id).toBe('fork-session')
-    expect((noMessage.body as { parentID?: string }).parentID).toBeUndefined()
-    expect(noMessage.body).toMatchObject({ title: 'Session One (fork #1)' })
+    expect((noMessage.body as { data: { id: string; parentID?: string } }).data.id).toBe('fork-session')
+    expect((noMessage.body as { data: { parentID?: string } }).data.parentID).toBeUndefined()
+    expect(noMessage.body).toMatchObject({ data: { title: 'Session One (fork #1)' } })
     expect(calls[0]).toMatchObject({ method: 'session.fork', payload: { sessionId: 's1' } })
     expect(calls[1]).toMatchObject({
       method: 'session.rename',
       payload: { sessionId: 'fork-session', title: 'Session One (fork #1)' },
     })
 
-    const withMessage = await request(server, 'POST', '/session/s1/fork', {
-      messageID: 'msg-user-1',
+    const withMessage = await request(server, 'POST', '/api/session/s1/fork', {
+      before: 'msg-user-1',
     })
     expect(withMessage.status).toBe(200)
+    // OpenCode's `before` is exclusive: the named message is not part of the
+    // fork. The message sits at event seq 2, so the dsh fork cuts at seq 1
+    // (dsh forks an inclusive event prefix).
     expect(calls[2]).toMatchObject({
       method: 'session.fork',
-      payload: { sessionId: 's1', atSeq: 2 },
+      payload: { sessionId: 's1', atSeq: 1 },
     })
     expect(calls[3]).toMatchObject({
       method: 'session.rename',
@@ -2928,17 +2724,17 @@ describe('bridge router: session routes', () => {
     router.ctx.state.registerPromptMessageId('s1', 'msg_bridge_user_1')
     expect(router.ctx.state.takePromptMessageId('s1', 'dsh-user-1')).toBe('msg_bridge_user_1')
 
-    const response = await request(server, 'POST', '/session/s1/fork', {
-      messageID: 'msg_bridge_user_1',
+    const response = await request(server, 'POST', '/api/session/s1/fork', {
+      before: 'msg_bridge_user_1',
     })
     expect(response.status).toBe(200)
     expect(calls[0]).toMatchObject({
       method: 'session.fork',
-      payload: { sessionId: 's1', atSeq: 2 },
+      payload: { sessionId: 's1', atSeq: 1 },
     })
   })
 
-  it('runs /compact through the dsh command registry for summarize and compact routes', async () => {
+  it('runs /compact through the dsh command registry for the compact route', async () => {
     const base = fakeApi()
     const lines: string[] = []
     const api: BridgeApi = {
@@ -2954,37 +2750,23 @@ describe('bridge router: session routes', () => {
       },
     }
     const { server } = await boot(api)
-    const summarize = await request(server, 'POST', '/session/s1/summarize', {
-      providerID: 'deepseek',
-      modelID: 'mock-model',
-    })
-    expect(summarize.status).toBe(200)
-    expect(summarize.body).toBe(true)
-
-    const alias = await request(server, 'POST', '/session/s1/compact')
-    expect(alias.status).toBe(200)
-    expect(alias.body).toBe(true)
-
     const v2 = await request(server, 'POST', '/api/session/s1/compact')
-    expect(v2.status).toBe(204)
-    expect(v2.body).toBe('')
-    expect(lines).toEqual(['/compact', '/compact', '/compact'])
+    expect(v2.status).toBe(200)
+    expect(v2.body).toMatchObject({ data: { type: 'compaction', sessionID: 's1' } })
+    expect(lines).toEqual(['/compact'])
   })
 
   it('rejects compact when the session agent or command registry is missing', async () => {
     const base = fakeApi()
     const { server } = await boot(base)
-    const noAgent = await request(server, 'POST', '/session/s1/summarize', {
-      providerID: 'deepseek',
-      modelID: 'mock-model',
-    })
+    const noAgent = await request(server, 'POST', '/api/session/s1/compact')
     expect(noAgent.status).toBe(409)
 
     const withAgent = await boot({
       ...base,
       agents: { get: () => ({ id: 's1' }) },
     })
-    const noRegistry = await request(withAgent.server, 'POST', '/session/s1/summarize', {})
+    const noRegistry = await request(withAgent.server, 'POST', '/api/session/s1/compact', {})
     expect(noRegistry.status).toBe(500)
   })
 
@@ -3012,46 +2794,27 @@ describe('bridge router: session routes', () => {
       },
     }
     const { server } = await boot(api)
-    const patched = await request(server, 'PATCH', '/session/s1', { title: 'renamed' })
-    expect(patched.status).toBe(200)
+    const patched = await request(server, 'PATCH', '/api/session/s1', { title: 'renamed' })
+    expect(patched.status).toBe(204)
     expect(calls[0]).toMatchObject({ method: 'session.rename', payload: { sessionId: 's1', title: 'renamed' } })
-
-    const prompt = await request(server, 'POST', '/session/s1/message', {
-      parts: [{ type: 'text', text: 'hi' }],
-    })
-    expect(prompt.status).toBe(200)
-    expect(calls[1]).toMatchObject({
-      method: 'session.prompt',
-      payload: { sessionId: 's1', mode: 'steer', content: [{ type: 'text', text: 'hi' }] },
-    })
-    expect(prompt.body).toMatchObject({ info: { role: 'assistant' }, parts: [] })
-
-    const promptAlias = await request(server, 'POST', '/session/s1/prompt', {
-      parts: [{ type: 'text', text: 'via alias' }],
-    })
-    expect(promptAlias.status).toBe(200)
-    expect(calls[2]).toMatchObject({
-      method: 'session.prompt',
-      payload: { sessionId: 's1', mode: 'steer', content: [{ type: 'text', text: 'via alias' }] },
-    })
 
     const promptV2 = await request(server, 'POST', '/api/session/s1/prompt', {
       parts: [{ type: 'text', text: 'via v2' }],
     })
     expect(promptV2.status).toBe(200)
     expect(promptV2.body).toMatchObject({
-      data: { sessionID: 's1', prompt: { parts: [{ type: 'text', text: 'via v2' }] }, delivery: 'queue' },
+      data: { sessionID: 's1', delivery: 'steer' },
     })
-    expect(calls[3]).toMatchObject({
+    expect(calls[1]).toMatchObject({
       method: 'session.prompt',
       payload: { sessionId: 's1', mode: 'steer', content: [{ type: 'text', text: 'via v2' }] },
     })
 
-    const slashPrompt = await request(server, 'POST', '/session/s1/message', {
+    const slashPrompt = await request(server, 'POST', '/api/session/s1/prompt', {
       parts: [{ type: 'text', text: '/compact' }],
     })
     expect(slashPrompt.status).toBe(200)
-    expect(calls[4]).toMatchObject({
+    expect(calls[2]).toMatchObject({
       method: 'session.prompt',
       payload: {
         sessionId: 's1',
@@ -3060,52 +2823,19 @@ describe('bridge router: session routes', () => {
       },
     })
 
-    const aborted = await request(server, 'POST', '/session/s1/abort')
-    expect(aborted.status).toBe(200)
-    expect(aborted.body).toBe(true)
-    expect(calls[5]).toMatchObject({ method: 'session.cancel', payload: { sessionId: 's1' } })
-
     const interrupted = await request(server, 'POST', '/api/session/s1/interrupt')
-    expect(interrupted.status).toBe(204)
-    expect(calls[6]).toMatchObject({ method: 'session.cancel', payload: { sessionId: 's1' } })
+    expect(interrupted.status).toBe(200)
+    expect(interrupted.body).toMatchObject({ interrupted: true })
+    expect(calls[3]).toMatchObject({ method: 'session.cancel', payload: { sessionId: 's1' } })
   })
 
   it('rejects unsupported prompt parts with 400', async () => {
     const { server } = await boot(fakeApi())
-    const result = await request(server, 'POST', '/session/s1/message', {
+    const result = await request(server, 'POST', '/api/session/s1/prompt', {
       parts: [{ type: 'subtask', prompt: 'x', description: 'y', agent: 'z' }],
     })
     expect(result.status).toBe(400)
     expect(result.body).toMatchObject({ name: 'BadRequest' })
-  })
-
-  it('accepts prompt_async submissions used by --mini attach', async () => {
-    const calls: Array<{ method: string; payload: unknown }> = []
-    const base = fakeApi()
-    const api: BridgeApi = {
-      ...base,
-      sessionController: {
-        ...base.sessionController,
-        prompt: async (request) => {
-          calls.push({ method: 'session.prompt', payload: request })
-          return okRpc({ accepted: true })
-        },
-      },
-    }
-    const { server } = await boot(api)
-    const result = await request(server, 'POST', '/session/s1/prompt_async', {
-      model: { providerID: 'deepseek', modelID: 'mock-model' },
-      parts: [{ type: 'text', text: 'mini hello' }],
-    })
-    expect(result.status).toBe(204)
-    expect(calls[0]).toMatchObject({
-      method: 'session.prompt',
-      payload: {
-        sessionId: 's1',
-        mode: 'steer',
-        content: [{ type: 'text', text: 'mini hello' }],
-      },
-    })
   })
 
   it('accepts text and image file parts from data URLs and local paths', async () => {
@@ -3127,7 +2857,7 @@ describe('bridge router: session routes', () => {
     }
     const { server } = await boot(api, work)
 
-    const textData = await request(server, 'POST', '/session/s1/message', {
+    const textData = await request(server, 'POST', '/api/session/s1/prompt', {
       parts: [{
         type: 'file',
         mime: 'text/plain',
@@ -3141,7 +2871,7 @@ describe('bridge router: session routes', () => {
       payload: { content: [{ type: 'text', text: 'hello' }] },
     })
 
-    const local = await request(server, 'POST', '/session/s1/message', {
+    const local = await request(server, 'POST', '/api/session/s1/prompt', {
       parts: [{
         type: 'file',
         mime: 'text/plain',
@@ -3155,7 +2885,7 @@ describe('bridge router: session routes', () => {
     })
 
     const imageData = Buffer.from('png').toString('base64')
-    const image = await request(server, 'POST', '/session/s1/prompt', {
+    const image = await request(server, 'POST', '/api/session/s1/prompt', {
       parts: [{
         type: 'file',
         mime: 'image/png',
@@ -3174,7 +2904,7 @@ describe('bridge router: session routes', () => {
     tempDirs.push(work)
     const { server } = await boot(fakeApi(), work)
 
-    const outside = await request(server, 'POST', '/session/s1/message', {
+    const outside = await request(server, 'POST', '/api/session/s1/prompt', {
       parts: [{
         type: 'file',
         mime: 'text/plain',
@@ -3184,7 +2914,7 @@ describe('bridge router: session routes', () => {
     expect(outside.status).toBe(400)
     expect(outside.body).toMatchObject({ name: 'BadRequest' })
 
-    const binary = await request(server, 'POST', '/session/s1/message', {
+    const binary = await request(server, 'POST', '/api/session/s1/prompt', {
       parts: [{
         type: 'file',
         mime: 'application/pdf',
@@ -3284,7 +3014,7 @@ describe('bridge router: session routes', () => {
     ])
   })
 
-  it('serves todo and diff from history/projections', async () => {
+  it('serves diff from history/projections', async () => {
     const work = gitFixture({ 'src/a.ts': 'const a = 1' })
     const base = fakeApi()
     const api = {
@@ -3296,8 +3026,7 @@ describe('bridge router: session routes', () => {
             { event: sessionEvent('todo/write', { todos: [{ content: 'a', status: 'in_progress' }] }, 1, 100) },
           ],
           hasMore: false,
-          projections: {
-            asOfSeq: 1,
+          projections: { kind: 'sequenced' as 'sequenced', asOfSeq: 1,
             values: {
               'produced-files': [{ file: 'src/a.ts', additions: 3, deletions: 1, status: 'modified' }],
             } as never,
@@ -3306,21 +3035,15 @@ describe('bridge router: session routes', () => {
       },
     }
     const { server } = await boot(api, work)
-    const todo = await request(server, 'GET', '/session/s1/todo')
-    expect(todo.status).toBe(200)
-    expect(todo.body).toMatchObject([{ content: 'a', status: 'in_progress', priority: 'medium' }])
-    const diff = await request(server, 'GET', '/session/s1/diff')
-    expect(diff.status).toBe(200)
-    expect(diff.body).toMatchObject([{ file: 'src/a.ts', additions: 3, deletions: 1 }])
     const v2Diff = await request(server, 'GET', '/api/session/s1/diff')
     expect(v2Diff.status).toBe(200)
-    expect(v2Diff.body).toMatchObject([{
+    expect(v2Diff.body).toMatchObject({ data: [{
       file: 'src/a.ts',
       additions: 3,
       deletions: 1,
       status: 'modified',
-    }])
-    expect((v2Diff.body as Array<Record<string, unknown>>)[0]).not.toHaveProperty('patch')
+    }] })
+    expect((v2Diff.body as { data: Array<Record<string, unknown>> }).data[0]).toHaveProperty('patch')
   })
 
   it('derives diff from tool result views when no produced-files projection exists', async () => {
@@ -3397,28 +3120,20 @@ describe('bridge router: session routes', () => {
       },
     }
     const { server } = await boot(api, work)
-    const diff = await request(server, 'GET', '/session/s1/diff')
-    expect(diff.status).toBe(200)
-    expect(diff.body).toMatchObject([{
-      file: trackedPath,
-      additions: 1,
-      deletions: 1,
-    }])
     const v2Diff = await request(server, 'GET', '/api/session/s1/diff')
     expect(v2Diff.status).toBe(200)
-    expect(v2Diff.body).toMatchObject([{
+    expect(v2Diff.body).toMatchObject({ data: [{
       file: trackedPath,
       status: 'modified',
       additions: 1,
       deletions: 1,
-    }])
-    expect(String((v2Diff.body as Array<{ patch?: string }>)[0]?.patch ?? '')).toContain('@@')
+    }] })
+    expect(String((v2Diff.body as { data: Array<{ patch?: string }> }).data[0]?.patch ?? '')).toContain('@@')
   })
 
-  it('returns empty todo/diff when no data exists', async () => {
+  it('returns an empty diff when no data exists', async () => {
     const { server } = await boot(fakeApi())
-    expect((await request(server, 'GET', '/session/s1/todo')).body).toEqual([])
-    expect((await request(server, 'GET', '/session/s1/diff')).body).toEqual([])
+    expect((await request(server, 'GET', '/api/session/s1/diff')).body).toEqual({ data: [] })
   })
 })
 
@@ -3431,7 +3146,7 @@ describe('bridge router: catalog routes', () => {
     },
   ]
 
-  it('serves providers/models to v1 and v2', async () => {
+  it('serves providers/models to v2', async () => {
     const base = fakeApi()
     const api = {
       ...base,
@@ -3446,10 +3161,6 @@ describe('bridge router: catalog routes', () => {
       },
     }
     const { server } = await boot(api)
-    const configProviders = await request(server, 'GET', '/config/providers')
-    expect(configProviders.body).toMatchObject({ providers: [{ id: 'deepseek' }], default: {} })
-    const provider = await request(server, 'GET', '/provider')
-    expect(provider.body).toMatchObject({ all: [{ id: 'deepseek' }], connected: ['deepseek'], default: {} })
     const model = await request(server, 'GET', '/api/model')
     expect(model.body).toMatchObject({ data: [{ id: 'deepseek-chat', providerID: 'deepseek' }] })
     const providerV2 = await request(server, 'GET', '/api/provider')
@@ -3507,31 +3218,20 @@ describe('bridge router: model variants, agent presets and /preset', () => {
     }
     const { server } = await boot(api)
 
-    const providers = await request(server, 'GET', '/config/providers')
-    expect((providers.body as {
-      providers: Array<{ models: Record<string, { variants?: Record<string, unknown> }> }>
-    }).providers[0]?.models['deepseek-v4-flash']?.variants).toEqual({
-      off: { reasoningEffort: 'off', name: 'Off' },
-      max: { reasoningEffort: 'max', name: 'Max' },
-    })
-
-    const v1Agents = await request(server, 'GET', '/agent')
-    expect((v1Agents.body as Array<{ name: string }>).map((agent) => agent.name)).toEqual([
-      'minimal',
-      'standard',
+    const models = await request(server, 'GET', '/api/model')
+    expect((models.body as {
+      data: Array<{ id: string; variants?: Array<{ id: string; body: Record<string, unknown> }> }>
+    }).data[0]?.variants).toEqual([
+      { id: 'off', headers: {}, body: { reasoningEffort: 'off', name: 'Off' } },
+      { id: 'max', headers: {}, body: { reasoningEffort: 'max', name: 'Max' } },
     ])
+
     const v2Agents = await request(server, 'GET', '/api/agent')
     expect((v2Agents.body as { data: Array<{ id: string }> }).data.map((agent) => agent.id)).toEqual([
       'minimal',
       'standard',
     ])
 
-    const v1Commands = await request(server, 'GET', '/command')
-    expect(v1Commands.body).toMatchObject([
-      { name: 'preset', template: 'preset' },
-      { name: 'goal', template: 'goal' },
-      { name: 'help', template: 'help' },
-    ])
     const v2Commands = await request(server, 'GET', '/api/command')
     expect(v2Commands.body).toMatchObject({
       data: [
@@ -3550,9 +3250,10 @@ describe('bridge router: model variants, agent presets and /preset', () => {
       updatedAt: 2000,
       running: false,
       blank: true,
+    agentAvailable: false,
       cwd: '/work',
       agentPreset: 'minimal',
-      projections: { asOfSeq: 0, values: { title: 'Model Session' } as never },
+      projections: { kind: 'sequenced' as 'sequenced', asOfSeq: 0, values: { title: 'Model Session' } as never },
     }
     const api: BridgeApi = {
       ...base,
@@ -3634,7 +3335,7 @@ describe('bridge router: model variants, agent presets and /preset', () => {
 
     // dsh loses the reasoning effort (model re-selection / preset switch).
     currentVariant = undefined
-    await request(server, 'POST', '/session/s1/message', {
+    await request(server, 'POST', '/api/session/s1/prompt', {
       parts: [{ type: 'text', text: 'probe' }],
     })
     expect(calls).toHaveLength(2)
@@ -3723,7 +3424,7 @@ describe('bridge router: model variants, agent presets and /preset', () => {
       model: { providerID: 'deepseek', modelID: 'mock-model' },
       parts: [{ type: 'text', text: 'max round' }],
     }
-    expect((await request(server, 'POST', '/session/s1/message', body)).status).toBe(200)
+    expect((await request(server, 'POST', '/api/session/s1/prompt', body)).status).toBe(200)
     expect((await request(server, 'POST', '/api/session/s1/prompt', body)).status).toBe(200)
     expect(calls).toHaveLength(2)
     expect(calls.every((call) => (call.payload as { reasoningEffort?: string }).reasoningEffort === 'max')).toBe(true)
@@ -3761,7 +3462,7 @@ describe('bridge router: model variants, agent presets and /preset', () => {
       originalBroadcast(events as never)
     }
 
-    await request(server, 'POST', '/session/s1/message', {
+    await request(server, 'POST', '/api/session/s1/prompt', {
       variant: 'max',
       model: { providerID: 'deepseek', id: 'mock-model' },
       parts: [{ type: 'text', text: 'max card' }],
@@ -3792,7 +3493,7 @@ describe('bridge router: model variants, agent presets and /preset', () => {
       },
     })
     const { server } = await boot(api)
-    const prompted = await request(server, 'POST', '/session/s1/message', {
+    const prompted = await request(server, 'POST', '/api/session/s1/prompt', {
       variant: 'off',
       // OpenCode sends variant at the top level; top-level must win even if a
       // stale nested model object still carries the previous max variant.
@@ -3810,9 +3511,9 @@ describe('bridge router: model variants, agent presets and /preset', () => {
     expect(second.status).toBe(200)
     expect(calls).toHaveLength(2)
     expect(calls[1]?.payload).toMatchObject({ reasoningEffort: 'off' })
-    const session = await request(server, 'GET', '/session/s1')
+    const session = await request(server, 'GET', '/api/session/s1')
     expect(session.body).toMatchObject({
-      model: { id: 'mock-model', providerID: 'deepseek', variant: 'off' },
+      data: { model: { id: 'mock-model', providerID: 'deepseek', variant: 'off' } },
     })
   })
 
@@ -3845,7 +3546,7 @@ describe('bridge router: model variants, agent presets and /preset', () => {
       },
     }
     const { server } = await boot(api)
-    const created = await request(server, 'POST', '/session', {
+    const created = await request(server, 'POST', '/api/session', {
       title: 'With Preset',
       agent: 'minimal',
       model: { providerID: 'deepseek', id: 'mock-model', variant: 'max' },
@@ -3890,7 +3591,7 @@ describe('bridge router: model variants, agent presets and /preset', () => {
       },
     }
     const { server } = await boot(api)
-    const prompted = await request(server, 'POST', '/session/s1/message', {
+    const prompted = await request(server, 'POST', '/api/session/s1/prompt', {
       variant: 'off',
       model: { providerID: 'deepseek', id: 'mock-model' },
       parts: [{ type: 'text', text: 'hi' }],
@@ -3933,12 +3634,12 @@ describe('bridge router: model variants, agent presets and /preset', () => {
       },
     }
     const { server } = await boot(api)
-    const message = await request(server, 'POST', '/session/s1/message', {
+    const message = await request(server, 'POST', '/api/session/s1/prompt', {
       agent: 'standard',
       parts: [{ type: 'text', text: 'hi' }],
     })
     expect(message.status).toBe(200)
-    const prompt = await request(server, 'POST', '/session/s1/prompt', {
+    const prompt = await request(server, 'POST', '/api/session/s1/prompt', {
       agent: 'minimal',
       parts: [{ type: 'text', text: 'hi' }],
     })
@@ -3948,14 +3649,9 @@ describe('bridge router: model variants, agent presets and /preset', () => {
       parts: [{ type: 'text', text: 'hi' }],
     })
     expect(v2.status).toBe(200)
-    const asyncResult = await request(server, 'POST', '/session/s1/prompt_async', {
-      agent: 'minimal',
-      parts: [{ type: 'text', text: 'hi' }],
-    })
-    expect(asyncResult.status).toBe(204)
     // A later prompt carrying an already-effective agent must not re-select
     // (dsh locks the preset after the first turn; re-applying only warns).
-    const repeat = await request(server, 'POST', '/session/s1/message', {
+    const repeat = await request(server, 'POST', '/api/session/s1/prompt', {
       agent: 'minimal',
       parts: [{ type: 'text', text: 'hi' }],
     })
@@ -3985,7 +3681,7 @@ describe('bridge router: model variants, agent presets and /preset', () => {
       },
     }
     const { server } = await boot(api)
-    const result = await request(server, 'POST', '/session/s1/message', {
+    const result = await request(server, 'POST', '/api/session/s1/prompt', {
       agent: 'build',
       parts: [{ type: 'text', text: 'hi' }],
     })
@@ -4026,7 +3722,7 @@ describe('bridge router: model variants, agent presets and /preset', () => {
       originalBroadcast(events as never)
     }
     for (let index = 0; index < 2; index++) {
-      const result = await request(server, 'POST', '/session/s1/message', {
+      const result = await request(server, 'POST', '/api/session/s1/prompt', {
         agent: 'standard',
         parts: [{ type: 'text', text: 'hi' }],
       })
@@ -4088,7 +3784,7 @@ describe('bridge router: model variants, agent presets and /preset', () => {
     }
 
     for (let index = 0; index < 2; index++) {
-      const result = await request(server, 'POST', '/session/s1/message', {
+      const result = await request(server, 'POST', '/api/session/s1/prompt', {
         agent: 'router-standard',
         parts: [{ type: 'text', text: 'continue' }],
       })
@@ -4111,9 +3807,10 @@ describe('bridge router: model variants, agent presets and /preset', () => {
       updatedAt: 2000,
       running: false,
       blank: false,
+    agentAvailable: false,
       cwd: '/work',
       agentPreset: 'router-standard',
-      projections: { asOfSeq: 0, values: { title: 'Session One' } as never },
+      projections: { kind: 'sequenced' as 'sequenced', asOfSeq: 0, values: { title: 'Session One' } as never },
     }
     const api: BridgeApi = {
       ...base,
@@ -4136,7 +3833,7 @@ describe('bridge router: model variants, agent presets and /preset', () => {
     }
     const { server, router } = await boot(api)
 
-    const listed = await request(server, 'GET', '/session')
+    const listed = await request(server, 'GET', '/api/session')
     expect(listed.status).toBe(200)
 
     const hub = router.ctx.hub
@@ -4154,7 +3851,7 @@ describe('bridge router: model variants, agent presets and /preset', () => {
       originalBroadcast(events as never)
     }
 
-    const result = await request(server, 'POST', '/session/s1/message', {
+    const result = await request(server, 'POST', '/api/session/s1/prompt', {
       agent: 'router-standard',
       parts: [{ type: 'text', text: 'continue' }],
     })
@@ -4215,29 +3912,28 @@ describe('bridge router: model variants, agent presets and /preset', () => {
         },
       },
     }
-    const { server } = await boot(api)
-    const listed = await request(server, 'POST', '/session/s1/command', {
-      command: 'preset',
-      arguments: '',
+    const { server, router } = await boot(api)
+    const texts = captureBroadcastTexts(router)
+    const listed = await request(server, 'POST', '/api/session/s1/command', {
+      name: 'preset',
+      text: '',
     })
-    expect(listed.status).toBe(200)
-    expect((listed.body as { parts: Array<{ text: string }> }).parts[0]?.text).toContain('standard')
-    expect((listed.body as { parts: Array<{ text: string }> }).parts[0]?.text).toContain('(default)')
+    expect(listed.status).toBe(204)
+    expect(texts.at(-1)).toContain('standard')
+    expect(texts.at(-1)).toContain('(default)')
 
-    const slashListed = await request(server, 'POST', '/session/s1/command', {
-      command: '/preset',
-      arguments: '',
+    const slashListed = await request(server, 'POST', '/api/session/s1/command', {
+      name: '/preset',
+      text: '',
     })
-    expect(slashListed.status).toBe(200)
+    expect(slashListed.status).toBe(204)
 
-    const switched = await request(server, 'POST', '/session/s1/command', {
-      command: 'preset',
-      arguments: 'minimal',
+    const switched = await request(server, 'POST', '/api/session/s1/command', {
+      name: 'preset',
+      text: 'minimal',
     })
-    expect(switched.status).toBe(200)
-    expect((switched.body as { parts: Array<{ text: string }> }).parts[0]?.text).toBe(
-      'Switched dsh agent preset to minimal',
-    )
+    expect(switched.status).toBe(204)
+    expect(texts.at(-1)).toBe('Switched dsh agent preset to minimal')
     expect(calls[0]).toMatchObject({
       method: 'agentPreset.select',
       payload: { sessionId: 's1', agentPreset: 'minimal' },
@@ -4267,20 +3963,20 @@ describe('bridge router: model variants, agent presets and /preset', () => {
     }
     const { server, router } = await boot(api)
     router.ctx.state.setSessionAgent('s1', 'minimal')
-    const switched = await request(server, 'POST', '/session/s1/command', {
-      command: 'preset',
-      arguments: 'standard',
+    const switched = await request(server, 'POST', '/api/session/s1/command', {
+      name: 'preset',
+      text: 'standard',
     })
-    expect(switched.status).toBe(200)
+    expect(switched.status).toBe(204)
 
-    const stale = await request(server, 'POST', '/session/s1/message', {
+    const stale = await request(server, 'POST', '/api/session/s1/prompt', {
       agent: 'minimal',
       parts: [{ type: 'text', text: 'first prompt' }],
     })
     expect(stale.status).toBe(200)
     expect(selects).toEqual(['standard'])
 
-    const laterTab = await request(server, 'POST', '/session/s1/message', {
+    const laterTab = await request(server, 'POST', '/api/session/s1/prompt', {
       agent: 'minimal',
       parts: [{ type: 'text', text: 'later Tab selection' }],
     })
@@ -4310,12 +4006,12 @@ describe('bridge router: model variants, agent presets and /preset', () => {
       },
     }
     const { server } = await boot(api)
-    const switched = await request(server, 'POST', '/session/s1/command', {
-      command: 'preset',
-      arguments: 'standard',
+    const switched = await request(server, 'POST', '/api/session/s1/command', {
+      name: 'preset',
+      text: 'standard',
     })
-    expect(switched.status).toBe(200)
-    const created = await request(server, 'POST', '/session', {})
+    expect(switched.status).toBe(204)
+    const created = await request(server, 'POST', '/api/session', {})
     expect(created.status).toBe(200)
     expect(createCalls.at(-1)?.agentPreset).toBe('standard')
   })
@@ -4373,11 +4069,11 @@ describe('bridge router: model variants, agent presets and /preset', () => {
       }
       originalBroadcast(events as never)
     }
-    const switched = await request(server, 'POST', '/session/s1/command', {
-      command: 'preset',
-      arguments: 'standard',
+    const switched = await request(server, 'POST', '/api/session/s1/command', {
+      name: 'preset',
+      text: 'standard',
     })
-    expect(switched.status).toBe(200)
+    expect(switched.status).toBe(204)
     expect(broadcasts).toContainEqual({ type: 'session.updated', agent: 'standard' })
 
     const finishedInfo = commandCards.find((card) =>
@@ -4444,11 +4140,11 @@ describe('bridge router: model variants, agent presets and /preset', () => {
       originalBroadcast(events as never)
     }
 
-    const switched = await request(server, 'POST', '/session/s1/command', {
-      command: 'preset',
-      arguments: 'liangshen',
+    const switched = await request(server, 'POST', '/api/session/s1/command', {
+      name: 'preset',
+      text: 'liangshen',
     })
-    expect(switched.status).toBe(200)
+    expect(switched.status).toBe(204)
     const beforeModel = { providerID: 'deepseek', modelID: 'deepseek-v4-pro', variant: 'high' }
     const model = { providerID: 'deepseek', modelID: 'deepseek-v4-pro-next', variant: 'max' }
     const livePreset = cards.find((card) => card.info?.id?.startsWith('msg_preset:'))
@@ -4472,26 +4168,6 @@ describe('bridge router: model variants, agent presets and /preset', () => {
     const finalCommandID = finalCommand?.info?.id
     expect(finalCommandID).toMatch(/^msg_cmd:/)
 
-    const v1 = await request(server, 'GET', '/session/s1/message')
-    const v1Entries = v1.body as Array<{
-      info: {
-        id: string
-        role: string
-        modelID?: string
-        providerID?: string
-        variant?: string
-        time?: { completed?: number }
-      }
-    }>
-    const v1Final = v1Entries.find((entry) => entry.info.id === finalCommandID)
-    expect(v1Final?.info).toMatchObject({
-      role: 'assistant',
-      modelID: 'deepseek-v4-pro-next',
-      providerID: 'deepseek',
-      variant: 'max',
-      time: { completed: expect.any(Number) },
-    })
-
     const v2 = await request(server, 'GET', '/api/session/s1/message')
     const v2Preset = (v2.body as {
       data: Array<{ id: string; type?: string; model?: unknown }>
@@ -4511,11 +4187,11 @@ describe('bridge router: model variants, agent presets and /preset', () => {
 
     // A later bridge-only command must consume the successful host read from
     // state instead of reverting to the pre-switch model cached at startup.
-    const help = await request(server, 'POST', '/session/s1/command', {
-      command: 'help',
-      arguments: '',
+    const help = await request(server, 'POST', '/api/session/s1/command', {
+      name: 'help',
+      text: '',
     })
-    expect(help.status).toBe(200)
+    expect(help.status).toBe(204)
     const latestCommand = cards.filter((card) => card.info?.id?.startsWith('msg_cmd:')).at(-1)
     expect(latestCommand?.info).toMatchObject({
       modelID: model.modelID,
@@ -4548,28 +4224,21 @@ describe('bridge router: model variants, agent presets and /preset', () => {
         },
       },
     }
-    const { server } = await boot(api)
+    const { server, router } = await boot(api)
+    const texts = captureBroadcastTexts(router)
 
-    const listed = await request(server, 'POST', '/session/s1/message', {
+    const listed = await request(server, 'POST', '/api/session/s1/prompt', {
       parts: [{ type: 'text', text: '/preset' }],
     })
     expect(listed.status).toBe(200)
-    expect((listed.body as { parts: Array<{ text: string }> }).parts[0]?.text).toContain('standard')
-    expect((listed.body as { parts: Array<{ text: string }> }).parts[0]?.text).toContain('(default)')
+    expect(texts.at(-1)).toContain('standard')
+    expect(texts.at(-1)).toContain('(default)')
 
-    const switched = await request(server, 'POST', '/session/s1/prompt', {
+    const switched = await request(server, 'POST', '/api/session/s1/prompt', {
       parts: [{ type: 'text', text: '/preset minimal' }],
     })
     expect(switched.status).toBe(200)
-    expect((switched.body as { parts: Array<{ text: string }> }).parts[0]?.text).toBe(
-      'Switched dsh agent preset to minimal',
-    )
-
-    const v2Listed = await request(server, 'POST', '/api/session/s1/prompt', {
-      parts: [{ type: 'text', text: '/preset' }],
-    })
-    expect(v2Listed.status).toBe(200)
-    expect(v2Listed.body).toMatchObject({ data: { sessionID: 's1', delivery: 'queue' } })
+    expect(texts.at(-1)).toBe('Switched dsh agent preset to minimal')
 
     expect(calls).toHaveLength(1)
     expect(calls[0]).toMatchObject({
@@ -4592,22 +4261,23 @@ describe('bridge router: model variants, agent presets and /preset', () => {
         },
       },
     }
-    const { server } = await boot(api)
+    const { server, router } = await boot(api)
+    const texts = captureBroadcastTexts(router)
 
-    const cmd = await request(server, 'POST', '/session/s1/command', {
-      command: 'help',
-      arguments: '',
+    const cmd = await request(server, 'POST', '/api/session/s1/command', {
+      name: 'help',
+      text: '',
     })
-    expect(cmd.status).toBe(200)
-    const cmdText = (cmd.body as { parts: Array<{ text: string }> }).parts[0]?.text
+    expect(cmd.status).toBe(204)
+    const cmdText = texts.at(-1) ?? ''
     expect(cmdText).toContain('dsh-oc')
     expect(cmdText).toContain('docs/FEATURES.md')
 
-    const slash = await request(server, 'POST', '/session/s1/message', {
+    const slash = await request(server, 'POST', '/api/session/s1/prompt', {
       parts: [{ type: 'text', text: '/help' }],
     })
     expect(slash.status).toBe(200)
-    expect((slash.body as { parts: Array<{ text: string }> }).parts[0]?.text).toContain('核心能力')
+    expect(texts.at(-1)).toContain('核心能力')
     expect(calls).toHaveLength(0)
   })
 
@@ -4628,7 +4298,7 @@ describe('bridge router: model variants, agent presets and /preset', () => {
       },
     }
     const { server } = await boot(api)
-    const result = await request(server, 'POST', '/session/s1/message', {
+    const result = await request(server, 'POST', '/api/session/s1/prompt', {
       parts: [{ type: 'text', text: '/preset nope' }],
     })
     expect(result.status).toBe(400)
@@ -4648,7 +4318,7 @@ describe('bridge router: error mapping', () => {
       sessionController: { ...base.sessionController, history: async () => errRpc('session-not-found', 'missing', { sessionId: 'x' }) },
     }
     const { server } = await boot(api)
-    const result = await request(server, 'GET', '/session/x')
+    const result = await request(server, 'GET', '/api/session/x')
     expect(result.status).toBe(404)
     expect(result.body).toMatchObject({
       name: 'NotFoundError',
@@ -4664,7 +4334,7 @@ describe('bridge router: error mapping', () => {
       sessionController: { ...base.sessionController, prompt: async () => errRpc('agent-busy', 'busy', { reason: 'x' }) },
     }
     const { server } = await boot(api)
-    const result = await request(server, 'POST', '/session/s1/message', { parts: [{ type: 'text', text: 'x' }] })
+    const result = await request(server, 'POST', '/api/session/s1/prompt', { parts: [{ type: 'text', text: 'x' }] })
     expect(result.status).toBe(409)
     expect(result.body).toMatchObject({ name: 'ConflictError', data: { code: 'agent-busy' } })
   })
@@ -4676,14 +4346,14 @@ describe('bridge router: error mapping', () => {
       sessionController: { ...base.sessionController, rename: async () => errRpc('title-invalid', 'bad title', { sessionId: 's1' }) },
     }
     const { server } = await boot(api)
-    const result = await request(server, 'PATCH', '/session/s1', { title: ' ' })
+    const result = await request(server, 'PATCH', '/api/session/s1', { title: ' ' })
     expect(result.status).toBe(400)
     expect(result.body).toMatchObject({ name: 'BadRequest' })
   })
 
   it('answers unlisted routes with 501 NotFoundError', async () => {
     const { server } = await boot(fakeApi())
-    for (const path of ['/nope', '/api/event', '/session/s1/forkx']) {
+    for (const path of ['/nope', '/api/session/s1/forkx']) {
       const result = await request(server, 'GET', path)
       expect(result.status, path).toBe(501)
       expect(result.body, path).toMatchObject({ name: 'NotFoundError' })
@@ -4723,13 +4393,12 @@ describe('bridge router: permission and question replies', () => {
       toolName: 'bash',
       callId: 'c1',
     })
-    const listed = await request(server, 'GET', '/permission')
-    expect(listed.body).toMatchObject([{ id: 'p1', sessionID: 's1', permission: 'bash' }])
-    const replied = await request(server, 'POST', '/permission/p1/reply', { reply: 'once' })
-    expect(replied.status).toBe(200)
-    expect(replied.body).toBe(true)
+    const listed = await request(server, 'GET', '/api/permission/request')
+    expect(listed.body).toMatchObject({ data: [{ id: 'p1', sessionID: 's1', action: 'bash' }] })
+    const replied = await request(server, 'POST', '/api/session/s1/permission/p1/reply', { reply: 'once' })
+    expect(replied.status).toBe(204)
     expect(outcomes).toEqual(['allowed-once'])
-    expect((await request(server, 'GET', '/permission')).body).toEqual([])
+    expect((await request(server, 'GET', '/api/permission/request')).body).toMatchObject({ data: [] })
   })
 
   it('degrades always to allowed-once', async () => {
@@ -4744,7 +4413,7 @@ describe('bridge router: permission and question replies', () => {
       approvalId: 'a2',
       toolName: 'edit',
     })
-    await request(server, 'POST', '/permission/p2/reply', { reply: 'always' })
+    await request(server, 'POST', '/api/session/s1/permission/p2/reply', { reply: 'always' })
     expect(outcomes).toEqual(['allowed-once'])
   })
 
@@ -4767,7 +4436,7 @@ describe('bridge router: permission and question replies', () => {
     expect(outcomes).toEqual(['rejected'])
   })
 
-  it('answers the SDK permission alias route with the response field', async () => {
+  it('saves an "always" permission grant for later reuse', async () => {
     const outcomes: string[] = []
     const base = fakeApi()
     const { server, router } = await boot(base)
@@ -4779,9 +4448,8 @@ describe('bridge router: permission and question replies', () => {
       approvalId: 'a4',
       toolName: 'bash',
     })
-    const replied = await request(server, 'POST', '/session/s1/permissions/p4', { response: 'always' })
-    expect(replied.status).toBe(200)
-    expect(replied.body).toBe(true)
+    const replied = await request(server, 'POST', '/api/session/s1/permission/p4/reply', { reply: 'always' })
+    expect(replied.status).toBe(204)
     expect(outcomes).toEqual(['allowed-once'])
     const saved = await request(server, 'GET', '/api/permission/saved')
     expect((saved.body as { data: Array<{ id: string; sessionID: string; action: string; resource: string }> }).data)
@@ -4854,7 +4522,7 @@ describe('bridge router: permission and question replies', () => {
     expect((await request(server, 'DELETE', '/api/permission/saved/s1:bash')).status).toBe(404)
   })
 
-  it('replies and rejects questions on v1 and v2', async () => {
+  it('replies and rejects questions on v2', async () => {
     const answers: unknown[] = []
     const base = fakeApi()
     const { server, router } = await boot(base)
@@ -4865,11 +4533,10 @@ describe('bridge router: permission and question replies', () => {
       sessionId: 's1',
       items: [{ id: 'dq1', question: 'Proceed?', options: [{ label: 'Yes' }, { label: 'No' }] }],
     })
-    const listed = await request(server, 'GET', '/question')
-    expect(listed.body).toMatchObject([{ id: 'q1', sessionID: 's1', questions: [{ question: 'Proceed?' }] }])
-    const reply = await request(server, 'POST', '/question/q1/reply', { answers: [['Yes']] })
-    expect(reply.status).toBe(200)
-    expect(reply.body).toBe(true)
+    const listed = await request(server, 'GET', '/api/session/s1/question')
+    expect(listed.body).toMatchObject({ data: [{ id: 'q1', sessionID: 's1', questions: [{ question: 'Proceed?' }] }] })
+    const reply = await request(server, 'POST', '/api/session/s1/question/q1/reply', { answers: [['Yes']] })
+    expect(reply.status).toBe(204)
     expect(answers[0]).toMatchObject([{ id: 'dq1', selected: ['Yes'] }])
 
     router.ctx.state.pendingQuestions.set('rpc-q2', (answer) => { answers.push(answer) })
@@ -4879,8 +4546,8 @@ describe('bridge router: permission and question replies', () => {
       sessionId: 's1',
       items: [{ id: 'dq2', question: 'Again?', options: [{ label: 'Y' }] }],
     })
-    const reject = await request(server, 'POST', '/question/q2/reject')
-    expect(reject.status).toBe(200)
+    const reject = await request(server, 'POST', '/api/session/s1/question/q2/reject')
+    expect(reject.status).toBe(204)
     expect(answers[1]).toBeUndefined()
 
     router.ctx.state.pendingQuestions.set('rpc-q3', (answer) => { answers.push(answer) })
@@ -4910,9 +4577,9 @@ describe('bridge router: permission and question replies', () => {
 
   it('returns 404 for unknown permission/question ids', async () => {
     const { server } = await boot(fakeApi())
-    expect((await request(server, 'POST', '/permission/nope/reply', { reply: 'once' })).status).toBe(404)
-    expect((await request(server, 'POST', '/question/nope/reply', { answers: [[]] })).status).toBe(404)
-    expect((await request(server, 'POST', '/question/nope/reject')).status).toBe(404)
+    expect((await request(server, 'POST', '/api/session/s1/permission/nope/reply', { reply: 'once' })).status).toBe(404)
+    expect((await request(server, 'POST', '/api/session/s1/question/nope/reply', { answers: [[]] })).status).toBe(404)
+    expect((await request(server, 'POST', '/api/session/s1/question/nope/reject')).status).toBe(404)
   })
 
   it('serves saved permissions as an empty v2 list', async () => {
@@ -4924,7 +4591,7 @@ describe('bridge router: permission and question replies', () => {
 describe('bridge router: OPTIONS and CORS', () => {
   it('answers preflight with 204 and CORS headers', async () => {
     const { server } = await boot(fakeApi())
-    const response = await fetch(server.url + '/session', { method: 'OPTIONS' })
+    const response = await fetch(server.url + '/api/session', { method: 'OPTIONS' })
     expect(response.status).toBe(204)
     expect(response.headers.get('access-control-allow-origin')).toBe('*')
   })
@@ -4966,43 +4633,23 @@ describe('bridge router: /goal command and goal todo merge', () => {
 
   it('runs /goal list and create through the command registry', async () => {
     const lines: string[] = []
-    const { server } = await boot(commandApi(lines))
-
-    const listed = await request(server, 'POST', '/session/s1/command', {
-      command: 'goal',
-      arguments: '',
-    })
-    expect(listed.status).toBe(200)
-    expect((listed.body as { parts: Array<{ text: string }> }).parts[0]?.text).toContain('No goal')
-
-    const created = await request(server, 'POST', '/session/s1/command', {
-      command: '/goal',
-      arguments: 'ship goal support',
-    })
-    expect(created.status).toBe(200)
-    expect((created.body as { parts: Array<{ text: string }> }).parts[0]?.text).toBe(
-      'Goal created: ship goal support',
-    )
-    expect(lines).toEqual(['/goal', '/goal ship goal support'])
-  })
-
-  it('appends a queue backlog hint to slash outcomes', async () => {
-    const lines: string[] = []
     const { server, router } = await boot(commandApi(lines))
-    router.ctx.state.applyInboxSplice('s1', 'next-turn', 0, 0, [{
-      id: 'queued-x',
-      content: [{ type: 'text', text: 'older queued prompt' }],
-      source: { kind: 'user' },
-    }], 1000)
+    const texts = captureBroadcastTexts(router)
 
-    const created = await request(server, 'POST', '/session/s1/command', {
-      command: 'goal',
-      arguments: 'ship queue hint',
+    const listed = await request(server, 'POST', '/api/session/s1/command', {
+      name: 'goal',
+      text: '',
     })
-    expect(created.status).toBe(200)
-    expect((created.body as { parts: Array<{ text: string }> }).parts[0]?.text).toBe(
-      'Goal created: ship queue hint\n\n[dsh-oc] 队列中还有 1 条消息待处理，将按原顺序继续执行',
-    )
+    expect(listed.status).toBe(204)
+    expect(texts.at(-1)).toContain('No goal')
+
+    const created = await request(server, 'POST', '/api/session/s1/command', {
+      name: '/goal',
+      text: 'ship goal support',
+    })
+    expect(created.status).toBe(204)
+    expect(texts.at(-1)).toBe('Goal created: ship goal support')
+    expect(lines).toEqual(['/goal', '/goal ship goal support'])
   })
 
   it('completes the current goal through the goals API', async () => {
@@ -5015,7 +4662,7 @@ describe('bridge router: /goal command and goal todo merge', () => {
         history: async () => okRpc({
           events: [],
           hasMore: false,
-          projections: { asOfSeq: 1, values: { goal: activeGoal } },
+          projections: { kind: 'sequenced' as 'sequenced', asOfSeq: 1, values: { goal: activeGoal } },
         } as never),
       },
       goals: {
@@ -5026,13 +4673,14 @@ describe('bridge router: /goal command and goal todo merge', () => {
         },
       },
     }
-    const { server } = await boot(api)
-    const result = await request(server, 'POST', '/session/s1/command', {
-      command: 'goal',
-      arguments: 'complete',
+    const { server, router } = await boot(api)
+    const texts = captureBroadcastTexts(router)
+    const result = await request(server, 'POST', '/api/session/s1/command', {
+      name: 'goal',
+      text: 'complete',
     })
-    expect(result.status).toBe(200)
-    expect((result.body as { parts: Array<{ text: string }> }).parts[0]?.text).toBe('Goal completed')
+    expect(result.status).toBe(204)
+    expect(texts.at(-1)).toBe('Goal completed')
     expect(calls[0]).toMatchObject({
       method: 'goal.complete',
       payload: { agent: { id: 'agent-1' }, ref: { id: 'g1', revision: 1 } },
@@ -5062,15 +4710,14 @@ describe('bridge router: /goal command and goal todo merge', () => {
         },
       },
     }
-    const { server } = await boot(api)
+    const { server, router } = await boot(api)
+    const texts = captureBroadcastTexts(router)
 
-    const created = await request(server, 'POST', '/session/s1/message', {
+    const created = await request(server, 'POST', '/api/session/s1/prompt', {
       parts: [{ type: 'text', text: '/goal ship goal support' }],
     })
     expect(created.status).toBe(200)
-    expect((created.body as { parts: Array<{ text: string }> }).parts[0]?.text).toBe(
-      'Goal created: ship goal support',
-    )
+    expect(texts.at(-1)).toBe('Goal created: ship goal support')
     expect(lines).toEqual(['/goal ship goal support'])
     expect(calls).toHaveLength(0)
   })
@@ -5088,9 +4735,9 @@ describe('bridge router: /goal command and goal todo merge', () => {
       },
     }
     const { server } = await boot(api)
-    const result = await request(server, 'POST', '/session/s1/command', {
-      command: 'goal',
-      arguments: 'edit',
+    const result = await request(server, 'POST', '/api/session/s1/command', {
+      name: 'goal',
+      text: 'edit',
     })
     expect(result.status).toBe(400)
     expect(result.body).toMatchObject({
@@ -5099,81 +4746,6 @@ describe('bridge router: /goal command and goal todo merge', () => {
     })
   })
 
-  it('returns goal-first todos from the goal projection', async () => {
-    const base = fakeApi()
-    const api = {
-      ...base,
-      sessionController: {
-        ...base.sessionController,
-        history: async () => okRpc({
-          events: [
-            { event: sessionEvent('todo/write', { todos: [{ content: 'step 1', status: 'in_progress' }] }, 1, 100) },
-          ],
-          hasMore: false,
-          projections: {
-            asOfSeq: 1,
-            values: {
-              goal: activeGoal,
-              todos: [{ content: 'step 1', status: 'in_progress' }],
-            } as never,
-          },
-        }),
-      },
-    }
-    const { server } = await boot(api)
-    const todo = await request(server, 'GET', '/session/s1/todo')
-    expect(todo.status).toBe(200)
-    expect(todo.body).toMatchObject([
-      { id: 'goal:g1', content: 'Goal: ship goal support', status: 'in_progress', priority: 'high' },
-      { content: 'step 1', status: 'in_progress', priority: 'medium' },
-    ])
-  })
-
-  it('folds the latest goal/change when no projection exists and clears with a tombstone', async () => {
-    const base = fakeApi()
-    const api = {
-      ...base,
-      sessionController: {
-        ...base.sessionController,
-        history: async () => okRpc({
-          events: [
-            { event: sessionEvent('todo/write', { todos: [{ content: 'step 1', status: 'pending' }] }, 1, 100) },
-            { event: sessionEvent('goal/change', { operation: 'create', goal: activeGoal.goal }, 2, 200) },
-            { event: sessionEvent('goal/change', {
-              operation: 'edit',
-              goal: { ...activeGoal.goal, revision: 2, objective: 'ship goal support v2' },
-            }, 3, 300) },
-          ],
-          hasMore: false,
-        }),
-      },
-    }
-    const { server } = await boot(api)
-    const todo = await request(server, 'GET', '/session/s1/todo')
-    expect(todo.body).toMatchObject([
-      { content: 'Goal: ship goal support v2', status: 'in_progress' },
-      { content: 'step 1', status: 'pending' },
-    ])
-
-    const clearedApi = {
-      ...fakeApi(),
-      sessionController: {
-        ...fakeApi().sessionController,
-        history: async () => okRpc({
-          events: [
-            { event: sessionEvent('goal/change', {
-              operation: 'clear',
-              cleared: { id: 'g1', revision: 3 },
-              clearedAt: 400,
-            }, 4, 400) },
-          ],
-          hasMore: false,
-        }),
-      },
-    }
-    const cleared = await boot(clearedApi)
-    expect((await request(cleared.server, 'GET', '/session/s1/todo')).body).toEqual([])
-  })
 })
 
 describe('bridge router: projection state seed', () => {
@@ -5188,8 +4760,7 @@ describe('bridge router: projection state seed', () => {
             }, 1, 100),
           }],
           hasMore: false,
-          projections: {
-            asOfSeq: 100,
+          projections: { kind: 'sequenced' as 'sequenced', asOfSeq: 100,
             values: {
               goal: {
                 goal: {
@@ -5233,7 +4804,7 @@ describe('bridge router: prompt queue delivery', () => {
       },
     })
     const { server } = await boot(api)
-    const submit = (text: string) => request(server, 'POST', '/session/s1/message', {
+    const submit = (text: string) => request(server, 'POST', '/api/session/s1/prompt', {
       parts: [{ type: 'text', text }],
     })
     await submit('same')
@@ -5261,7 +4832,7 @@ describe('bridge router: prompt queue delivery', () => {
       },
     })
     const { server } = await boot(api)
-    const result = await request(server, 'POST', '/session/s1/message', {
+    const result = await request(server, 'POST', '/api/session/s1/prompt', {
       parts: [{ type: 'text', text: 'inserted while busy' }],
     })
     expect(result.status).toBe(200)

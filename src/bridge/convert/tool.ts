@@ -1,6 +1,6 @@
 import type { ContentBlock } from '@deepseek-ai/dsh-llm/types'
 import type { ToolEventView } from '../dsh-types.js'
-import type { Part, ToolPart } from '@opencode-ai/sdk/client'
+import type { WireToolPart } from './wire.js'
 import { safeJsonParse, textFromBlocks } from './common.js'
 
 export interface ToolCallInfo {
@@ -483,10 +483,7 @@ function completedMetadata(call: ToolCallInfo, result: ToolResultInfo, tool: str
 }
 
 function resultText(content: readonly ContentBlock[]): string {
-  const blocks = content.flatMap((block) =>
-    block.type === 'tool-result' ? block.content : [block],
-  )
-  return textFromBlocks(blocks as readonly { type: string; text?: unknown }[])
+  return textFromBlocks(content as readonly { type: string; text?: unknown }[])
 }
 
 /** Model-facing result text for one tool/result event (used by v2 events). */
@@ -524,7 +521,7 @@ export function subagentMetadataForCall(call: ToolCallInfo): RecordValue {
 }
 
 /** A `tool/call` event alone becomes a pending ToolPart. */
-export function pendingToolPart(call: ToolCallInfo, options: ToolPartOptions): ToolPart {
+export function pendingToolPart(call: ToolCallInfo, options: ToolPartOptions): WireToolPart {
   const input = safeJsonParse(call.arguments)
   const tool = opencodeToolName(call.name, input)
   return {
@@ -548,7 +545,7 @@ export function pendingToolPart(call: ToolCallInfo, options: ToolPartOptions): T
  * input grows with every tool-call delta. The TUI upserts by part id, so
  * repeated updates progressively reveal the command/arguments.
  */
-export function streamingToolPart(call: StreamingToolCall, options: ToolPartOptions): ToolPart {
+export function streamingToolPart(call: StreamingToolCall, options: ToolPartOptions): WireToolPart {
   const input = safeJsonParse(call.arguments ?? '')
   const name = call.name ?? 'tool'
   const tool = opencodeToolName(name, input)
@@ -569,7 +566,7 @@ export function streamingToolPart(call: StreamingToolCall, options: ToolPartOpti
 }
 
 /** Placeholder for an in-flight call (dsh does not emit this state today). */
-export function runningToolPart(call: ToolCallInfo, options: ToolPartOptions): ToolPart {
+export function runningToolPart(call: ToolCallInfo, options: ToolPartOptions): WireToolPart {
   const input = safeJsonParse(call.arguments)
   const tool = opencodeToolName(call.name, input)
   const metadata = subagentMetadataForCall(call)
@@ -595,7 +592,7 @@ export function completedToolPart(
   call: ToolCallInfo,
   result: ToolResultInfo,
   options: ToolPartOptions,
-): ToolPart {
+): WireToolPart {
   const input = safeJsonParse(call.arguments)
   const tool = opencodeToolName(call.name, input)
   const metadata = completedMetadata(call, result, tool, input)
@@ -625,7 +622,7 @@ export function errorToolPart(
   call: ToolCallInfo,
   result: ToolResultInfo,
   options: ToolPartOptions,
-): ToolPart {
+): WireToolPart {
   const input = safeJsonParse(call.arguments)
   const tool = opencodeToolName(call.name, input)
   const message = result.error?.name ?? result.error?.code ?? 'tool failed'
@@ -650,8 +647,4 @@ export function errorToolPart(
       },
     },
   }
-}
-
-export function isToolPart(part: Part): part is ToolPart {
-  return part.type === 'tool'
 }

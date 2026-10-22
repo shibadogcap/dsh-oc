@@ -254,13 +254,9 @@ export function makeSessionLog({
         step,
         message: {
           id: MessageId(makeId('msg-tool', rng)),
-          role: 'user',
-          content: [{
-            type: 'tool-result',
-            toolCallId: ToolCallId(callId),
-            content: [{ type: 'text', text: 'perf-tool-output\n' }],
-            isError: false,
-          }],
+          role: 'tool',
+          toolCallId: ToolCallId(callId),
+          content: [{ type: 'text', text: 'perf-tool-output\n' }],
           source: { kind: 'tool', callId: ToolCallId(callId) },
         },
       }, { surfaceOp: 'append' })

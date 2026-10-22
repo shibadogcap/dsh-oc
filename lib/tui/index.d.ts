@@ -41,6 +41,7 @@ interface DownloadOpenCodeOptions {
   fetchImpl?: FetchLike;
   spawnSyncImpl?: typeof spawnSync;
   probe?: (bin: string) => string | undefined;
+  installNpmPackage?: (packageName: string, version: string, targetDir: string) => Promise<boolean>;
 }
 /**
  * Rewrite a GitHub asset URL through `DSH_OC_OPENCODE_MIRROR` when set.
@@ -153,7 +154,7 @@ declare function prepareOpenCodeTuiState(dshHome: string, env?: NodeJS.ProcessEn
 /**
  * Seed the isolated opencode config with `autoupdate: false`, preserving any
  * existing values. This is the config-level counterpart of
- * `OPENCODE_DISABLE_AUTOUPDATE` and keeps the attach child from downloading or
+ * `OPENCODE_DISABLE_AUTOUPDATE` and keeps the TUI child from downloading or
  * hot-replacing itself even if a future opencode version changes the env flag.
  */
 declare function prepareOpenCodeConfig(dshHome: string): void;
@@ -197,7 +198,7 @@ interface StartTuiOptions {
   setTimeoutImpl?: TimerSetter;
   clearTimeoutImpl?: TimerClearer;
 }
-/** A running attach child with forwarding and bounded termination helpers. */
+/** A running TUI child with forwarding and bounded termination helpers. */
 interface RunningTui {
   readonly child: TuiChild;
   /** Forward one parent signal to the child. */
@@ -205,7 +206,7 @@ interface RunningTui {
   /** SIGTERM the child, then SIGKILL after the configured grace period. */
   terminate(): void;
 }
-/** Spawn `opencode attach` with stdio inherit and signal/termination helpers. */
+/** Spawn `opencode --server <url>` with stdio inherit and signal/termination helpers. */
 declare function startOpenCodeTui(options: StartTuiOptions): RunningTui;
 /** Listener shape accepted by the injectable process object. */
 type SignalListener = () => void;
@@ -223,7 +224,7 @@ interface SignalProcessLike {
  */
 declare function installSignalForwarding(processLike: SignalProcessLike, getRunning: () => RunningTui | undefined, signals?: readonly NodeJS.Signals[]): () => void;
 /**
- * Filter dsh app arguments into opencode `attach` arguments.
+ * Filter dsh app arguments into opencode arguments.
  * Unknown/malformed arguments are reported, never silently dropped.
  */
 declare function filterSupportedArgs(args: readonly string[]): {
@@ -234,7 +235,7 @@ declare function filterSupportedArgs(args: readonly string[]): {
 declare function tuiDirFromArgs(args: readonly string[]): string | undefined;
 /** Extract the `--session <id>` / `-s <id>` / `--session=<id>` value. */
 declare function tuiSessionFromArgs(args: readonly string[]): string | undefined;
-/** Resolve and validate an attach `--dir` value before handing it to opencode. */
+/** Resolve and validate a `--dir` value before handing it to opencode. */
 declare function resolveTuiDir(dir: string): string;
 /**
  * Build the child environment: inherit the parent and isolate opencode state

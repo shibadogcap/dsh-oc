@@ -52,7 +52,7 @@ jobs:
           tmux -V
 
       - name: Install dsh CLI
-        run: npm install -g @deepseek-ai/dsh@0.1.5-rc.2
+        run: npm install -g @deepseek-ai/dsh@0.2.1-rc.2
 
       - name: Install pnpm globally
         run: npm install -g pnpm@11.9.0
@@ -65,10 +65,13 @@ jobs:
 
       - name: Install locked opencode binary
         run: |
+          # The 2.x CLI ships as npm platform packages, not GitHub release
+          # archives. The linux-x64 package carries the executable directly.
           mkdir -p /tmp/oc-bin
-          curl -fsSL -o /tmp/oc-bin/opencode.tar.gz \
-            https://github.com/anomalyco/opencode/releases/download/v1.18.18/opencode-linux-x64.tar.gz
-          tar -xzf /tmp/oc-bin/opencode.tar.gz -C /tmp/oc-bin
+          cd /tmp/oc-bin
+          npm pack @opencode/cli-linux-x64@2.1.0
+          tar -xzf opencode-cli-linux-x64-2.1.0.tgz
+          mv package/bin/opencode /tmp/oc-bin/opencode
           chmod +x /tmp/oc-bin/opencode
           echo "DSH_OC_OPENCODE_BIN=/tmp/oc-bin/opencode" >> "$GITHUB_ENV"
 

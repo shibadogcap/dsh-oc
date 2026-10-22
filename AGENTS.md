@@ -8,13 +8,13 @@
 
 dsh-oc 是 DeepSeek Harness（dsh）的 OpenCode TUI 前端：
 
-- **前端**：官方 opencode CLI（`attach` 模式），只负责渲染、键盘、终端生命周期。
+- **前端**：官方 opencode CLI（`--server` 模式），只负责渲染、键盘、终端生命周期。
 - **后端**：dsh 负责 Agent、Session、工具、模型、权限、提问。
 - **桥接**：dsh-oc 在 dsh 进程内提供 OpenCode 兼容的 HTTP/SSE 服务（`oc-bridge`），
   并启动官方 TUI 子进程（`oc-tui`）。
 
 ```text
-dsh (Node) ── dsh-oc bundle ── oc-bridge (HTTP/SSE) <── opencode TUI (attach)
+dsh (Node) ── dsh-oc bundle ── oc-bridge (HTTP/SSE) <── opencode TUI (--server)
                   │
                   └─ DSH Agent/Session/Tools/LLM/Approval/Questions
 ```
@@ -33,18 +33,17 @@ src/
   bridge/            # OpenCode 协议桥
     router.ts        # 核心：SSE、缓存/预取、命令/权限 helper、桥服务接线
     routes/          # 路由注册（按域拆分，聚合于 routes.ts）
-      boot.ts        # v1/v2 启动与目录路由（/path /project /config /provider /agent ...）
-      session-v1.ts  # v1 会话路由（列表、消息、prompt、abort、command、todo、diff）
-      session-v2.ts  # v2 会话路由
-      permission.ts  # permission / question 路由
-    routes.ts        # 聚合器（注册顺序即匹配顺序，勿乱）
-      vcs.ts         # 真实 git 信息/状态/diff 路由
+      boot.ts        # 启动与目录路由（/api/info /api/location /api/agent /api/model ...）
+      session-v2.ts  # 会话路由（列表、消息、prompt、interrupt、command、fork）
       fs.ts          # 工作区文件读取/列表/查找路由
+    routes.ts        # 聚合器（注册顺序即匹配顺序，勿乱）
     events.ts        # SSE 事件翻译（assistant-stream、turn.*、message.*、session.*、工具流、权限）
     state.ts         # 桥内存状态（缓存、标题、preset、活动标记）
     file-uploads.ts  # dsh 0.1.5 headless fileUploads provider（见下）
     convert/         # dsh 事件 → opencode 消息/会话/模型/权限转换
     http.ts sse.ts rpc.ts errors.ts stubs.ts git.ts fs.ts
+    web-ui.ts        # 官方 opencode Web UI：AppArchive 展开 + 静态文件伺服
+  rewind/            # 回退插件：session fork + 按回合分组的文件快照（copy-on-write）
   tui/               # opencode 子进程解析/下载/spawn、信号转发、退出处理
   help.ts            # --help / /help 静态能力摘要
 tui-branding/        # DSH OC 品牌 logo TUI 插件
@@ -61,7 +60,7 @@ pnpm install
 pnpm build                 # tsdown → lib/
 pnpm typecheck             # tsc --noEmit
 pnpm test                  # vitest
-pnpm run probe             # opencode 1.18.18 协议路由探针（63/63）
+pnpm run probe             # opencode 2.1.0 协议路由探针（覆盖官方 client 全部路由）
 pnpm run e2e               # 全量 e2e（真实 opencode TUI，稳定套件约 15–20 分钟）
 pnpm run e2e:api           # API e2e 子集（快速回归）
 pnpm run perf              # 会话性能压测（--sessions N --scale ...）
@@ -79,7 +78,7 @@ bash scripts/e2e-recovery-crash.sh        # 故障域：SIGKILL 中途崩溃后 
 bash scripts/e2e-recovery-sse-reconnect.sh # 故障域：观察者 SSE 断流重连后 exactly-once
 node scripts/build-replay-corpus.mjs      # 重新生成 tests/fixtures/replay 合成语料（结构保持，无真实内容）
 node scripts/replay-corpus-manifest.mjs   # 扫描真实会话的 feature 覆盖，输出语料覆盖差集（无内容外泄）
-bash scripts/e2e-golden-trace.sh          # 冻结/校验 1.18.18 黄金 SSE 轨迹（DSH_OC_GOLDEN_OVERWRITE=1 刷新）
+bash scripts/e2e-golden-trace.sh          # 冻结/校验 1.18.18 事件形状的黄金 SSE 轨迹（DSH_OC_GOLDEN_OVERWRITE=1 刷新）
 bash scripts/e2e-queued-order-repro.sh    # 工具+排队+后续文本的官方 TUI 顺序复现记录
 bash scripts/upgrade-lane.sh --bin <candidate>
                                           # 候选 opencode 升级 lane：黄金轨迹语义差分
@@ -90,8 +89,8 @@ bash scripts/e2e-minimal-server-repro.sh  # 官方最小 server 归因：脚本�
 scripts/monitor-process-io.sh --pid <pid> --log <tsv> # 默认 observe-only，正常退出静默
 scripts/e2e-tui-subagent.sh             # dsh subagent → OpenCode task + child 导航
 scripts/e2e-tui-shell.sh                # 官方 TUI `!` shell → OS shell tool card
-tests/e2e/fake-opencode-idle.sh           # fake attach 空闲无 EOF 忙循环回归
-tests/e2e/monitor-process-io-attach.sh    # exact attach PID/log/无目标 kill shell 回归
+tests/e2e/fake-opencode-idle.sh           # fake TUI 空闲无 EOF 忙循环回归
+tests/e2e/monitor-process-io-attach.sh    # exact TUI PID/log/无目标 kill shell 回归
  ```
 
 本地直连 dsh profile（实时验证）：`dsh plugin --profile oc add .`；改代码后
@@ -125,46 +124,55 @@ dsh --profile oc --help                                            # 验证版�
 ## opencode 二进制与网络策略
 
 - 直接使用官方 opencode 二进制，版本锁定 `opencode-version.json`（当前
-  `1.18.18`）；启动时 `resolveOpenCodeBinary` + `verifyOpenCodeVersion` 双重
+  `2.1.0`）；启动时 `resolveOpenCodeBinary` + `verifyOpenCodeVersion` 双重
   校验，显式 `DSH_OC_OPENCODE_BIN` 版本不匹配会直接报错，不回退到 PATH 上
   的其它版本。
-- OpenTUI 1.18.18/Bun 的 native 临时文件泄漏由 dsh-oc 隔离到
+- OpenTUI 2.1.0/Bun 的 native 临时文件泄漏由 dsh-oc 隔离到
   `$DSH_HOME/opencode/tmp/tui-<pid>`；正常退出清理，下一次启动回收已退出
   dsh 进程目录。不会搜索任意用户插件缓存，也不会关闭官方版本/完整性校验。
 - 解析优先级：`DSH_OC_OPENCODE_BIN` → `$DSH_HOME/opencode/bin/<version>`
-  → PATH 上版本匹配的 `opencode` → 官方 npm 平台包（惰性安装，npm integrity
-  校验）→ profile 内 `opencode-ai` 包 → GitHub Release 惰性下载。
-  `opencode-assets.json` 覆盖各平台/架构变体，每个 asset 独立 sha256 与 npm
-  tarball integrity；下载支持代理（`HTTPS_PROXY`/`HTTP_PROXY`）与
-  `DSH_OC_OPENCODE_MIRROR` 镜像前缀。
+  → PATH 上版本匹配的 `opencode` → 官方 npm 平台包 `@opencode/cli-<platform>-<arch>`
+  （惰性安装，npm integrity 校验）→ profile 内 `opencode-ai` / `@opencode/cli` 包。
+  2.1.0 起不再维护 `opencode-assets.json`，二进制只从 npm 平台包取得；安装走代理
+  （`HTTPS_PROXY`/`HTTP_PROXY`）与 `DSH_OC_OPENCODE_MIRROR` 镜像前缀。
 - 网络策略：子进程强制 `OPENCODE_DISABLE_AUTOUPDATE=1` /
   `OPENCODE_DISABLE_MODELS_FETCH=1` / `OPENCODE_DISABLE_LSP_DOWNLOAD=1`，并在
   隔离配置写 `autoupdate: false`，关闭后台外网行为。
 - 缓存错误时清除 `$DSH_HOME/opencode/bin` 或设置匹配版本的
   `DSH_OC_OPENCODE_BIN`；`DSH_OC_TUI_TIMESTAMPS=1` 可让 TUI 默认显示时间戳
   （`ctrl+shift+t` / `/timestamps` 运行时切换）。
+- **官方 Web UI 用同一个二进制**：`src/bridge/web-ui.ts` 把 opencode 二进制里的
+  AppArchive（`packages/cli/src/app-archive.ts` 的格式：小端 u32 的 JSON 索引长度、
+  索引、`[offset, length]` 与 brotli 压缩的资产本体）解到
+  `$DSH_HOME/opencode/web-ui/<version>/`，bridge 自己伺服这些文件。
+  `src/bridge/index.ts` 的 `resolveWebUi()` 查找顺序是 `DSH_OC_WEB_UI` → 解包目录。
+  **二进制只被查找、绝不由 bridge 安装**（`resolveOpenCodeBinary` 传
+  `installNpmPackage: async () => false`）；TUI 插件本来就要装二进制，所以 Web UI
+  从下一次启动起出现。找不到二进制时没有 Web UI，API 不受影响。
+  离线展开用 `node scripts/extract-opencode-web-ui.mjs --bin <二进制> --out <目录>`。
 - **opencode 按 vendor ABI 对待**：升级候选版本必须以“黄金 HTTP/SSE 轨迹 +
   真实 TUI 回放”的语义差分为门槛，不能只看 SDK 类型与路由数量；为候选
   新版本建独立 upgrade lane，不直接替换锁定版本。
 - **真实模型回归定位为 smoke**：`scripts/e2e-real-llm.sh` 覆盖真实文本、
-  工具、goal、variant 与 TUI attach，但随机模型输出不承担桥接正确性的
+  工具、goal、variant 与 TUI 交互，但随机模型输出不承担桥接正确性的
   唯一 oracle；确定性回放语料（脱敏真实 session）是更优先的回归手段。
 - **恢复故障域按路径分别验证**：`client-sse-reconnect` /
   `mux-resubscribe` / `process-crash-recovery` 不是同一条重连路径。共享
-  oracle 在 `tests/e2e/recovery-lib.sh`（v1/v2 签名、权威 idle、前缀/全图
+  oracle 在 `tests/e2e/recovery-lib.sh`（v2 签名、权威 idle、前缀/全图
   比较）；改动 bridge SSE/历史转换时至少跑
   `e2e-recovery-consistency.sh` + `e2e-recovery-crash.sh` +
   `e2e-recovery-sse-reconnect.sh`。
 
-- **status 热路径**：官方 TUI 等待回合时会高频轮询 `/session/status`；bridge
-  从 dsh `api-session/status`/`api-session/activity` 维护内存 authoritative map，
-  冷启动最多一次有界 `session.list` seed，避免每秒扫描全量持久化 session。
+- **status 热路径**：bridge 从 dsh `api-session/status`/`api-session/activity`
+  维护内存 authoritative map，并通过 SSE `session.status` 事件对外发布；
+  `POST /api/session/:id/wait` 是 2.x 的空闲等待入口。
 - **SSE 断线契约**：`SseHub` 保留受事件数/序列化字节双上限约束的 ring，消费
   `Last-Event-ID` 严格回放其后的事件；游标淘汰或未知时记录告警并回放当前
-  status/control snapshot。每连接不触发 history/list 扫描。
+  status/control snapshot。每连接不触发 history/list 扫描。2.x 客户端要求事件流
+  以 `server.connected` 开流，bridge 建连后先发该帧再回放。
 - **e2e TUI I/O 观察**：设置 `DSH_OC_E2E_MONITOR_IO=1` 后，
   `tests/e2e/common.sh` 在 `e2e_tui_wait_attach` 中精确解析当前 run 的
-  `opencode attach` PID，以 observe-only monitor 记录到该 run 目录；默认
+  `opencode --server` PID，以 observe-only monitor 记录到该 run 目录；默认
   `0.25s` / `32MiB` read 窗口可由 `DSH_OC_E2E_MONITOR_INTERVAL` /
   `DSH_OC_E2E_MONITOR_READ_THRESHOLD` 覆盖。监控随目标退出，不按名称结束目标；
   必要清理只允许结束 monitor 自身 PID。需要把正常退出写到 stderr 时显式加
@@ -190,11 +198,11 @@ dsh --profile oc --help                                            # 验证版�
   - `dsh-tool-fs` 的 `write`/`edit` 是 0.1.5 的文件工具（`str_replace_editor` 只
     在 0.1.2 base 行、已 opt-in 化）；新文件 `write` 的 result meta 是空 diffs，
     bridge 从调用参数合成 diff，保证 opencode edit 卡片有 `metadata.diff`。
-  - **首回合标签**：所有 provisional 卡片（live SSE、prompt 响应 placeholder、流式
-    中 v1/v2 history 合并、shell 合成卡片）必须用
+  - **首回合标签**：所有 provisional 卡片（live SSE、流式中的 history 合并、
+    shell 合成卡片）必须用
     `state.sessionModelSelectionFor()` + `sessionAgentFor()` 取会话实际值，禁止回退
     到 `build`/`deepseek-chat`；prompt 未携带模型时用
-    `placeholderSessionOptionsForPrompt` 回退部署默认模型。TUI 的映射默认 agent
+    部署默认模型回退。TUI 的映射默认 agent
     `build` 由 `applyAgentFromBody` 解析成部署默认 preset，保证首回合显示真实 preset。
 
 ## 自测门槛（提交/合并前必须全绿）
@@ -228,16 +236,58 @@ e2e 脚本只允许在 `main` / `develop` 与 `chore-*` / `fix-*` / `docs-*` /
 
 ## 关键实现约定与陷阱
 
-- **路由注册顺序即匹配顺序**：`src/bridge/routes.ts` 按 boot → session-v1 →
-  permission → session-v2 → vcs → fs → SSE 顺序调用；新增路由放在对应域文件。
+- **路由注册顺序即匹配顺序**：`src/bridge/routes.ts` 按 boot → session-v2 →
+  session-v2-extra → fs → stubs → client-compat → SSE 顺序调用；新增路由放在对应域文件。
 - **会话列表标题**：dsh `session.list` 不返回 title 投影；bridge 从
   `session.history` tail 投影补读（≤40 非空会话同步全量，大列表后台低并发补
   24，绝不阻塞列表请求）。标题优先级：投影标题 → 目录 basename → session id。
 - **在途合并与缓存**：`session.list` / `session.history` 的在途 RPC 共享
   （`InteractionState` 内 loading promise），失效用 generation 计数防竞态。
+- **回退（revert）边界是排他的**：`POST /api/session/:id/revert/stage` 指定的
+  消息及其之后的消息在 commit 时一并丢弃；`POST /api/session/:id/fork` 的
+  `before` 同样排他。dsh 的 `sessionController.fork` 复制的是**包含** `atSeq` 的
+  接前缀，所以切点要用 `R.atSeqBeforeMessage`（边界消息的前一个事件）算；切点在
+  第一条消息之前时 dsh 表达不了空 fork，返回 400 `cannot cut before the first
+  message`。三个路由（stage / `DELETE .../revert` / commit）与 `session.revert.*`
+  三个事件在 `src/bridge/routes/session-v2.ts`；文件回滚在 `src/rewind/`（按 turn
+  分组的 copy-on-write 快照，stage 即时回滚、commit 保留、clear 撤销；边界是
+  用户 prompt 时本回合的文件也算入）。
+- **回退后 opencode 会话 id 跟随 fork**：commit 以切点 fork dsh 会话，并用
+  `InteractionState.setSessionAlias` 把 opencode id 指向 fork。因此 `rpc()` 里的
+  `resolveSessionPayload` 会把所有 dsh 调用改写到 fork；会话列表用原 id 发布
+  fork 并丢掉被替换的会话；`GET /api/session/:id` 与 `/message` 读 fork；fork 的
+  SSE 事件由 `mapEventSessionId` 改写回原 id；模型/preset/标题/消息 id 映射由
+  `inheritSessionState` 继承。和 OpenCode 一样，下一条 prompt 到达时
+  `POST /api/session/:id/prompt` 先提交已暂存的回退。已知限制：文件 diff 是首尾
+  改动行之间的一个粗 hunk（与 bridge 自身的文件改动 diff 同形），不是完整 LCS
+  diff。
 - **SSE turn 事件**：`turn/start` 广播 `session.status busy` + `turn.wait`；
   `turn/end` 广播 `session.status idle` + `session.idle` + `turn.idle`。
   TUI 的 Esc 打断依赖 `phase === "running"`，没有 `turn.wait` 就不会打断。
+- **SSE 心跳不能去掉**：`src/bridge/sse.ts` 每 15 秒给每个连接写一帧
+  `: heartbeat\n\n`（官方 server 的 `packages/server/src/handlers/event.ts` 同样式）。
+  没有心跳时安静会话的流会被客户端判定为断流：官方客户端报 "Event stream
+  stalled" 并重连，OpenChamber 的上游读取器 20 秒就放弃，两者都变成重连循环。
+  注释帧对 SSE 解析器透明，但算"收到了数据"。
+- **status 快照必须保持有界**：`replaySessionStatusSnapshot()` 的上限是
+  `SESSION_STATUS_SNAPSHOT_LIMIT = 20`（先报运行中的会话，剩下名额按
+  `sessionStatusUpdatedAt` 给最近动过的）。旧实现把 bridge 见过的一切会话都
+  报一遍，官方 Web UI 每次连接要读几百条会话记录，初始加载永远结束不了。
+  放宽这个上限要连带评估连接成本。
+- **CORS 与官方 server 对齐**：`src/bridge/http.ts` 的 `isAllowedCorsOrigin()` /
+  `corsHeaders()` 必须保持官方 `packages/server/src/cors.ts` 的形状：允许
+  `http://localhost:<port>`、`http://127.0.0.1:<port>`、`oc://renderer`、tauri
+  的源、`*.opencode.ai`，加上 `DSH_OC_CORS`（逗号分隔，等价官方 `cors` 选项）；
+  允许时**回显请求自己的 origin** 并带 `Access-Control-Allow-Credentials: true`。
+  旧的 `Access-Control-Allow-Origin: *` 已删除：带凭据的请求会被浏览器拒绝
+  （"credentialed request requires Access-Control-Allow-Origin '<origin>'"），
+  浏览器 UI 因此完全连不上。不要再退回 `*`。
+- **Web UI 回落规则**：`src/bridge/http.ts` 里匹配不到任何路由的 `GET`/`HEAD`
+  交给 `router.serveWebUi`（`src/bridge/web-ui.ts`）：单页应用，未知路径也是
+  `index.html`；`_assets/`、`icons/` 下缺失的文件是 404，其它方法的未匹配路由
+  仍是 501。API 路由优先于 Web UI。
+- **`DSH_OC_HTTP_LOG=1`** 打开每个请求的 stderr 追踪（`[bridge/http] <METHOD>
+  <path>`），是没有浏览器时确认 UI 调用模式的手段。
 - **reasoning 时长**：reasoning part 的 `end` 取该块最后一条 chunk 的时间；
   text 块开始时、以及 turn/end（中断无最终消息）时都会关闭仍打开的
   reasoning part，避免 thinking 一直转圈。0.1.5 的 live 时间来自
@@ -250,8 +300,9 @@ e2e 脚本只允许在 `main` / `develop` 与 `chore-*` / `fix-*` / `docs-*` /
 - **退出 splash**：官方 opencode 二进制在会话有内容时打印自己的 logo 与
   `opencode -s <id>` 恢复命令，无法替换；dsh-oc 在下方补一行 dsh 恢复说明
   （`DSH_OC_DISABLE_EXIT_NOTE=1` 可关）。
-- **--mini**：通过 `POST /session/:id/prompt_async` 提交；流式回合打断按两次
-  Esc（与官方 opencode 1.18.18 handler 一致），全量 TUI 也按两次。
+- **--mini**：通过 `opencode mini --server <bridge-url>` 启动，prompt 走
+  `POST /api/session/:id/prompt`；流式回合打断按两次
+  Esc（与官方 opencode 2.1.0 handler 一致），全量 TUI 也按两次。
 - **mini e2e 退出码**：`scripts/e2e-tui-mini.sh` 的三次 C-c 可能由 SIGINT
   结束并返回 130；脚本接受 0/130，但仍必须断言 dsh-oc 退出提示。
 - **协议探针**：`scripts/probe-opencode.mjs` 自动扫描 `router.ts` +

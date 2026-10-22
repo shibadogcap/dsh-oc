@@ -86,7 +86,10 @@ async function newRun(argv) {
   run('git', ['init', '-q', '-b', 'main'], { cwd: workdir })
 
   run('dsh', ['plugin', '--profile', 'oc', 'add', addSpec], { env: dshEnv })
-  run('dsh', ['plugin', '--profile', 'oc', 'add', '@deepseek-ai/dsh-llm-mock-server@0.1.0-rc.6'], { env: dshEnv })
+  // The mock server version has to match the dsh runtime: the 0.1.x line
+  // requires `dsh-invariants@^0.1`, which the plugin manager rejects against
+  // dsh 0.2.1-rc.2.
+  run('dsh', ['plugin', '--profile', 'oc', 'add', '@deepseek-ai/dsh-llm-mock-server@0.2.1-rc.2'], { env: dshEnv })
   // The local dsh install may carry a customization that references the
   // `dsh-minimal-restrict` package from the shipped minimal preset (minimal
   // restricted to the RL two-tool surface). Isolated e2e profiles must
@@ -104,7 +107,10 @@ async function newRun(argv) {
   if (!ocBlock) fail('dump-config: missing @chiro2001/dsh-oc bundle block')
   for (const id of [
     'webserver',
-    'agent-presets',
+    // dsh 0.2.x split the old `agent-presets` plugin into the registry and
+    // the preset service.
+    'agent-preset-registry',
+    'agent-preset',
     'workspace',
     'directory-picker',
     'session-controller',

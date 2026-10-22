@@ -189,6 +189,23 @@ export interface BridgeApi {
   agents?: BridgeAgents
   /** Host object layers injected by dsh-base; kept for ABI validation. */
   sessions?: unknown
+  /** Rewind service (optional). */
+  rewind?: {
+    fork(sessionId: string, atSeq: number): Promise<string>
+    resolveAlias(sessionId: string): string
+    setAlias(opencodeId: string, dshId: string): void
+    filesAfter(sessionId: string, boundary: { turn: number; includeTurn: boolean }): Array<{
+      file: string
+      patch: string
+      additions: number
+      deletions: number
+      status: 'added' | 'deleted' | 'modified'
+    }>
+    restoreFilesAfter(sessionId: string, boundary: { turn: number; includeTurn: boolean }): string[]
+    undoRestore(sessionId: string): string[]
+    commitRestore(sessionId: string): void
+    forgetFiles(sessionId: string): void
+  }
   sessionProjections?: unknown
 }
 

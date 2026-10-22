@@ -1,18 +1,20 @@
 {
   "name": "@chiro2001/dsh-oc",
-  "version": "0.2.0-rc.4",
+  "version": "0.2.1-rc.1",
   "bin": {
     "dsh-oc": "bin/dsh-oc.mjs"
   },
   "type": "module",
   "packageManager": "pnpm@11.9.0",
   "engines": {
-    "node": ">=22"
+    "node": ">=22",
+    "dsh": ">=0.2.1-rc.2 <0.3.0"
   },
   "exports": {
     ".": "./lib/index.js",
     "./bridge": "./lib/bridge/index.js",
     "./file-uploads": "./lib/bridge/file-uploads.js",
+    "./rewind": "./lib/rewind/index.js",
     "./tui": "./lib/tui/index.js",
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./package.json": "./package.json"
@@ -22,7 +24,6 @@
     "bin",
     "cordis.patch.yml",
     "opencode-version.json",
-    "opencode-assets.json",
     "tui-branding",
     "docs"
   ],
@@ -37,6 +38,10 @@
     "test": "vitest run",
     "branding:art": "node scripts/generate-tui-branding-art.mjs",
     "probe": "node scripts/probe-opencode.mjs",
+    "check:client-routes": "node scripts/check-client-routes.mjs",
+    "e2e:openchamber": "node scripts/e2e-openchamber-bootstrap.mjs",
+    "e2e:openchamber-events": "bun scripts/e2e-openchamber-events.ts",
+    "e2e:revert": "node scripts/e2e-revert-flow.mjs",
     "perf": "node scripts/perf.mjs",
     "perf:gen": "node scripts/perf-session-gen.mjs",
     "features:update": "node scripts/update-feature-matrix.mjs",
@@ -48,9 +53,9 @@
     "zod": "^4.0.0"
   },
   "peerDependencies": {
-    "@deepseek-ai/cordis": ">=4.0.2",
-    "@deepseek-ai/dsh-cmdline": ">=0.1.5-rc.2",
-    "@deepseek-ai/dsh-home-paths": ">=0.1.5-rc.2"
+    "@deepseek-ai/cordis": ">=4.0.5",
+    "@deepseek-ai/dsh-cmdline": ">=0.2.1-rc.2 <0.3.0",
+    "@deepseek-ai/dsh-home-paths": ">=0.2.1-rc.2 <0.3.0"
   },
   "peerDependenciesMeta": {
     "@deepseek-ai/cordis": {
@@ -64,17 +69,21 @@
     }
   },
   "devDependencies": {
-    "@deepseek-ai/cordis": "4.0.2",
-    "@deepseek-ai/dsh-agent": "0.1.5-rc.2",
-    "@deepseek-ai/dsh-api-session-controller": "0.1.5-rc.2",
-    "@deepseek-ai/dsh-cmdline": "0.1.5-rc.2",
-    "@deepseek-ai/dsh-home-paths": "0.1.5-rc.2",
-    "@deepseek-ai/dsh-llm": "0.1.5-rc.2",
-    "@deepseek-ai/dsh-session": "0.1.5-rc.2",
-    "@deepseek-ai/dsh-tools": "0.1.5-rc.2",
-    "@deepseek-ai/dsh-user-approval": "0.1.5-rc.2",
-    "@deepseek-ai/dsh-user-questions": "0.1.5-rc.2",
-    "@opencode-ai/sdk": "1.18.18",
+    "@deepseek-ai/cordis": "4.0.5",
+    "@deepseek-ai/dsh-agent": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-agent-preset": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-agent-preset-registry": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-api-session-controller": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-client-file-upload": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-cmdline": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-commands": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-home-paths": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-llm": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-session": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-tools": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-user-approval": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-user-questions": "0.2.1-rc.2",
+    "@opencode/client": "2.1.0",
     "@types/node": "26.2.0",
     "figlet": "^1.11.4",
     "tsdown": "0.22.14",

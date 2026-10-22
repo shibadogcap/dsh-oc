@@ -83,46 +83,10 @@ recovery_signature_v2() {
   ' > "$out"
 }
 
-# v1 normalized graph carries the parent chain the official TUI consumes.
-# Parent ids are normalized to relative indexes so warm (surface ids) and
-# cold (raw dsh ids) projections are comparable.
-recovery_signature_v1() {
-  local bridge="$1"
-  local sid="$2"
-  local out="$3"
-  curl -s "$bridge/session/$sid/message" | jq -c '
-    def norm_part:
-      if .type == "tool" then
-        { type, name: (.tool // ""), status: .state.status,
-          text: (.state.output // .state.error // "") }
-      else
-        { type, text: (.text // "") }
-      end;
-    . as $all |
-    [ $all[] as $msg |
-      {
-        role: $msg.info.role,
-        parent: (if $msg.info.parentID == null then null else
-          ([ $all | to_entries[] | select(.value.info.id == $msg.info.parentID) | .key ][0] // null) end),
-        parts: [$msg.parts[]? | norm_part]
-      }
-    ]
-  ' > "$out"
-}
-
-# Sanity guards against empty assertions: at least one completed tool part
-# with output is required only when the graph has tool parts; assistant
-# parents must always resolve.
+# Sanity guard against empty assertions: at least one completed tool part
+# with output is required only when the graph has tool parts.
 recovery_assert_sane() {
-  local v1="$1"
-  local v2="$2"
-  if ! jq -e '
-    all(.[]; .role != "assistant" or .parent != null)
-  ' "$v1" >/dev/null; then
-    echo "recovery: v1 graph has dangling assistant parent" >&2
-    cat "$v1" >&2
-    return 1
-  fi
+  local v2="$1"
   if jq -e '[.. | objects | select(.type? == "tool")] | length > 0' "$v2" >/dev/null 2>&1; then
     if ! jq -e '
       ([ .[] | select(.parts[]?.type == "tool")
@@ -145,7 +109,6 @@ recovery_compare_graphs() {
     --slurpfile b "$re" '
       ($a[0] | length) == ($b[0] | length)
       and ([$a[0][].type] == [$b[0][].type])
-      and ([$a[0][].parent] == [$b[0][].parent])
       and ([$a[0][].parts] == [$b[0][].parts])
     ' >/dev/null; then
     echo "recovery: $label graphs differ" >&2

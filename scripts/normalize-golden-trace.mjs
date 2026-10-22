@@ -89,13 +89,57 @@ const events = lines
   })
   .filter((event) => event !== null)
 
-const normalized = events.map((event) => {
-  const payload = event.payload ?? event
-  return {
-    type: payload.type ?? 'unknown',
-    props: normalize(payload.properties ?? payload.data ?? {}),
-  }
-})
+// The OpenCode 2.x native vocabulary the bridge publishes next to the
+// 1.18.18 events. It is not part of the 1.18.18 vendor ABI this baseline
+// freezes, so the baseline keeps the 1.x projection only.
+const V2_NATIVE_EVENTS = new Set([
+  'session.execution.started',
+  'session.execution.succeeded',
+  'session.execution.failed',
+  'session.execution.interrupted',
+  'session.step.started',
+  'session.step.streamed',
+  'session.step.ended',
+  'session.step.failed',
+  'session.text.started',
+  'session.text.delta',
+  'session.text.ended',
+  'session.reasoning.started',
+  'session.reasoning.delta',
+  'session.reasoning.ended',
+  'session.tool.input.started',
+  'session.tool.input.delta',
+  'session.tool.input.ended',
+  'session.tool.called',
+  'session.tool.progress',
+  'session.tool.success',
+  'session.tool.failed',
+  'session.inbox.enqueued',
+  'session.inbox.delivered',
+  'session.inbox.cancelled',
+  'session.created',
+  'session.renamed',
+  'session.agent.selected',
+  'session.model.selected',
+  'session.compaction.started',
+  'session.compaction.delta',
+  'session.compaction.ended',
+  'session.shell.started',
+  'session.shell.ended',
+  'form.created',
+  'form.replied',
+  'form.cancelled',
+])
+
+const normalized = events
+  .map((event) => {
+    const payload = event.payload ?? event
+    return {
+      type: payload.type ?? 'unknown',
+      props: normalize(payload.properties ?? payload.data ?? {}),
+    }
+  })
+  .filter((event) => !V2_NATIVE_EVENTS.has(event.type))
 
 writeFileSync(resolve(outPath), `${normalized.map((event) => JSON.stringify(event)).join('\n')}\n`)
 const serialized = JSON.stringify(normalized)

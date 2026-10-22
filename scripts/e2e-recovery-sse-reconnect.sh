@@ -39,7 +39,7 @@ tmux send-keys -t "$E2E_TUI_SESSION" 'sse reconnect me' Enter
 SID=""
 deadline=$((SECONDS + 30))
 while (( SECONDS < deadline )); do
-  SID="$(curl -s "$E2E_BRIDGE_URL/session" | jq -r '.[0].id // empty' 2>/dev/null || true)"
+  SID="$(curl -s "$E2E_BRIDGE_URL/api/session" | jq -r '.data[0].id // empty' 2>/dev/null || true)"
   if [[ -n "$SID" ]]; then break; fi
   sleep 1
 done
@@ -97,8 +97,6 @@ SSE2_PID=""
 
 echo "== final exactly-once checks =="
 recovery_signature_v2 "$E2E_BRIDGE_URL" "$SID" "$E2E_RUN_DIR/final-v2.json"
-recovery_signature_v1 "$E2E_BRIDGE_URL" "$SID" "$E2E_RUN_DIR/final-v1.json"
-recovery_assert_sane "$E2E_RUN_DIR/final-v1.json" "$E2E_RUN_DIR/final-v2.json"
 
 if ! curl -s "$E2E_BRIDGE_URL/api/session/$SID/message" | jq -e '
     ([.data[].id] | length) == ([.data[].id] | unique | length)

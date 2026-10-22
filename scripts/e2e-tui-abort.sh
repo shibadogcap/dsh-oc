@@ -110,7 +110,7 @@ sleep 1
 SESSION_ID=""
 deadline=$((SECONDS + 30))
 while (( SECONDS < deadline )); do
-  SESSION_ID="$(curl -s "$E2E_BRIDGE_URL/session" | jq -r '.[0].id // empty' 2>/dev/null || true)"
+  SESSION_ID="$(curl -s "$E2E_BRIDGE_URL/api/session" | jq -r '.[0].id // empty' 2>/dev/null || true)"
   if [[ -n "$SESSION_ID" ]]; then break; fi
   sleep 1
 done
@@ -159,9 +159,9 @@ echo "  spinner settled after interrupt (frames: ${spinner1:-<none>})"
 
 echo "== v2 interrupt alias =="
 BEFORE_V2="$(wc -l < "$MOCK_ERR")"
-curl -sN --max-time 60 "$E2E_BRIDGE_URL/global/event" > "$E2E_RUN_DIR/v2-sse.log" 2>/dev/null &
+curl -sN --max-time 60 "$E2E_BRIDGE_URL/api/event" > "$E2E_RUN_DIR/v2-sse.log" 2>/dev/null &
 V2_SSE_PID=$!
-curl -s -X POST "$E2E_BRIDGE_URL/session/$SESSION_ID/message" -H 'Content-Type: application/json' \
+curl -s -X POST "$E2E_BRIDGE_URL/api/session/$SESSION_ID/message" -H 'Content-Type: application/json' \
   -d '{"parts":[{"type":"text","text":"interrupt via v2 api"}]}' >/dev/null
 deadline=$((SECONDS + 20))
 while (( SECONDS < deadline )); do
@@ -233,7 +233,7 @@ if [[ -z "$REACHED" ]]; then
   exit 1
 fi
 SSE_PID=""
-curl -sN "$E2E_BRIDGE_URL/global/event" > "$E2E_RUN_DIR/mini-sse.log" 2>/dev/null &
+curl -sN "$E2E_BRIDGE_URL/api/event" > "$E2E_RUN_DIR/mini-sse.log" 2>/dev/null &
 SSE_PID=$!
 tmux send-keys -t "$E2E_TUI_SESSION" 'mini interrupt e2e' Enter
 deadline=$((SECONDS + 25))
@@ -250,7 +250,7 @@ if ! rg -q 'message.part.delta' "$E2E_RUN_DIR/mini-sse.log" 2>/dev/null; then
 fi
 sleep 1
 # opencode's prompt handler arms the interrupt on the first Escape and calls
-# session.abort on the second (the same 1.18.18 handler used by full TUI).
+# session.abort on the second (the same 2.1.0 handler used by full TUI).
 tmux send-keys -t "$E2E_TUI_SESSION" Escape
 sleep 1
 tmux send-keys -t "$E2E_TUI_SESSION" Escape

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Golden trace baseline e2e (experiment 1c / vendor ABI): runs the known
-# tool-call + follow-up scenario against the official opencode 1.18.18 TUI,
+# tool-call + follow-up scenario against the official opencode 2.1.0 TUI,
 # records the bridge SSE from a session-filtered observer, normalizes the
 # trace to tests/fixtures/golden/, and asserts the final v1/v2 graphs are
 # exactly-once. The committed normalized trace is the current-version
@@ -53,7 +53,7 @@ tmux send-keys -t "$E2E_TUI_SESSION" 'golden trace tool prompt' Enter
 SID=""
 deadline=$((SECONDS + 30))
 while (( SECONDS < deadline )); do
-  SID="$(curl -s "$E2E_BRIDGE_URL/session" | jq -r '.[0].id // empty' 2>/dev/null || true)"
+  SID="$(curl -s "$E2E_BRIDGE_URL/api/session" | jq -r '.data[0].id // empty' 2>/dev/null || true)"
   if [[ -n "$SID" ]]; then break; fi
   sleep 1
 done
@@ -81,7 +81,7 @@ if (( SECONDS >= deadline )); then
 fi
 
 tmux send-keys -t "$E2E_TUI_SESSION" 'golden trace text prompt' Enter
-recovery_wait_text "$E2E_BRIDGE_URL/session/$SID/message" "golden trace text prompt"
+recovery_wait_text "$E2E_BRIDGE_URL/api/session/$SID/message" "golden trace text prompt"
 recovery_wait_idle "$E2E_BRIDGE_URL" "$SID"
 sleep 1
 kill "$SSE_PID" 2>/dev/null || true
@@ -89,8 +89,6 @@ SSE_PID=""
 
 echo "== exactly-once graph assertions =="
 recovery_signature_v2 "$E2E_BRIDGE_URL" "$SID" "$E2E_RUN_DIR/final-v2.json"
-recovery_signature_v1 "$E2E_BRIDGE_URL" "$SID" "$E2E_RUN_DIR/final-v1.json"
-recovery_assert_sane "$E2E_RUN_DIR/final-v1.json" "$E2E_RUN_DIR/final-v2.json"
 if ! jq -e '
     ([ .[] | select(.type == "user") ] | length) == 2
     and ([ .[] | select(.type == "assistant") | .parts[]

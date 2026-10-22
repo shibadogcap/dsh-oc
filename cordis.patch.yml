@@ -9,10 +9,69 @@
         host: 127.0.0.1
         port: 0
 
-    - id: agent-presets
-      name: '@deepseek-ai/dsh-agent-presets'
+    - id: agent-preset-registry
+      name: '@deepseek-ai/dsh-agent-preset-registry'
       config:
         default: minimal
+
+    - id: preset-minimal
+      name: '@deepseek-ai/dsh-agent-preset'
+      config:
+        id: minimal
+        order: 1
+        plugins:
+          - id: persona
+            name: '@deepseek-ai/dsh-persona'
+            config:
+              prefix: You are a helpful software engineer assistant.
+              complete: true
+              includeRuntimeContext: false
+          - id: tool-fs
+            name: '@deepseek-ai/dsh-tool-fs'
+            config:
+              read: true
+              readImage: true
+              write: true
+              edit: true
+          - id: compaction
+            name: cordis:group
+            group: true
+            isolate:
+              compaction: true
+            config:
+              - id: compaction-basic
+                name: '@deepseek-ai/dsh-compaction-basic'
+              - id: command-compact
+                name: '@deepseek-ai/dsh-command-compact'
+          - id: persistent-shell
+            name: cordis:group
+            group: true
+            isolate:
+              terminals: true
+            config:
+              - id: pty
+                name: '@deepseek-ai/dsh-terminal'
+              - id: terminal-bash
+                name: '@deepseek-ai/dsh-terminal-bash'
+                disabled: !!js process.platform === 'win32'
+                config:
+                  timeoutMs: 300000
+              - id: persistent-bash
+                name: '@deepseek-ai/dsh-tool-bash-persistent'
+                disabled: !!js process.platform === 'win32'
+                config:
+                  timeoutMs: 300000
+              - id: terminal-pwsh
+                name: '@deepseek-ai/dsh-terminal-bash'
+                disabled: !!js process.platform !== 'win32'
+                config:
+                  shellDialect: pwsh
+                  timeoutMs: 300000
+              - id: persistent-pwsh
+                name: '@deepseek-ai/dsh-tool-pwsh-persistent'
+                disabled: !!js process.platform !== 'win32'
+                config:
+                  timeoutMs: 300000
 
     # The standard preset's delegation tools need the host model-selection
     # settings namespace, which dsh-base does not mount by itself.
@@ -22,8 +81,14 @@
     - id: workspace
       name: '@deepseek-ai/dsh-workspace'
 
+    - id: workspace-changes
+      name: '@deepseek-ai/dsh-workspace-changes'
+      config:
+        maxFiles: 500
+
     - id: directory-picker
       name: '@deepseek-ai/dsh-host-directory-picker-auto'
+      disabled: true
 
     # dsh 0.1.5 moved `fileUploads` into the session-controller inject list.
     # oc-bridge has no browser transport, so mount the headless provider in
@@ -34,9 +99,31 @@
     - id: session-controller
       name: '@deepseek-ai/dsh-api-session-controller'
 
+    - id: terminal-controller
+      name: '@deepseek-ai/dsh-api-terminal-controller'
+
+    - id: job-controller
+      name: '@deepseek-ai/dsh-api-job-controller'
+
+    - id: workspace-controller
+      name: '@deepseek-ai/dsh-api-workspace-controller'
+
+    - id: workspace-files
+      name: '@deepseek-ai/dsh-api-workspace-files'
+
+    - id: settings-controller
+      name: '@deepseek-ai/dsh-api-settings-controller'
+
+    # mcp-client temporarily disabled: dsh 0.2.1 API mismatch (reconnect).
+    # - id: mcp-client
+    #   name: '@deepseek-ai/dsh-mcp-client'
+    - id: oc-rewind
+      name: '@chiro2001/dsh-oc/rewind'
+      inject: [sessionController]
+
     - id: oc-bridge
       name: '@chiro2001/dsh-oc/bridge'
-      inject: [sessionController, agentPresets, goals, sessionSkillCatalog, agents, sessions, sessionProjections]
+      inject: [sessionController, agentPresets, goals, sessionSkillCatalog, agents, sessions, sessionProjections, rewind]
 
     - id: oc-tui
       name: '@chiro2001/dsh-oc/tui'

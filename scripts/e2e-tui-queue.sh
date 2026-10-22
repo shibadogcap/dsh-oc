@@ -44,7 +44,7 @@ wait_permission_dialog() {
   local deadline=$((SECONDS + 60))
   while (( SECONDS < deadline )); do
     local pending
-    pending="$(curl -s "$E2E_BRIDGE_URL/permission" | jq 'length' 2>/dev/null || echo 0)"
+    pending="$(curl -s "$E2E_BRIDGE_URL/api/permission/request" | jq '.data | length' 2>/dev/null || echo 0)"
     e2e_tui_capture "$E2E_RUN_DIR/tui-queue-dialog.txt"
     if [[ "$pending" != "0" ]] && grep -qa 'Permission required' "$E2E_RUN_DIR/tui-queue-dialog.txt" \
       && grep -qa 'Allow once' "$E2E_RUN_DIR/tui-queue-dialog.txt"; then
@@ -67,7 +67,7 @@ tmux send-keys -t "$E2E_TUI_SESSION" "e2e first blocked prompt" Enter
 SID=""
 deadline=$((SECONDS + 30))
 while (( SECONDS < deadline )); do
-  SID="$(curl -s "$E2E_BRIDGE_URL/session" | jq -r '.[0].id // empty' 2>/dev/null || true)"
+  SID="$(curl -s "$E2E_BRIDGE_URL/api/session" | jq -r '.[0].id // empty' 2>/dev/null || true)"
   if [[ -n "$SID" ]]; then break; fi
   sleep 1
 done
@@ -84,7 +84,7 @@ fi
 echo "  first turn blocked on permission dialog"
 
 echo "== second prompt queues while the agent is busy =="
-curl -s -X POST "$E2E_BRIDGE_URL/session/$SID/message" -H 'Content-Type: application/json' \
+curl -s -X POST "$E2E_BRIDGE_URL/api/session/$SID/message" -H 'Content-Type: application/json' \
   -d '{"parts":[{"type":"text","text":"e2e second queued prompt"}]}' >/dev/null
 
 QUEUED_HINT=""
@@ -110,8 +110,8 @@ tmux send-keys -t "$E2E_TUI_SESSION" Enter
 SECOND_HINT=""
 deadline=$((SECONDS + 90))
 while (( SECONDS < deadline )); do
-  text="$(curl -s "$E2E_BRIDGE_URL/session/$SID/message" | jq -r '[.. | objects | select(has("text")) | .text] | join(" ")' 2>/dev/null || true)"
-  count="$(curl -s "$E2E_BRIDGE_URL/session/$SID/message" | jq '[.[] | select(.info.role == "user")] | length' 2>/dev/null || true)"
+  text="$(curl -s "$E2E_BRIDGE_URL/api/session/$SID/message" | jq -r '[.. | objects | select(has("text")) | .text] | join(" ")' 2>/dev/null || true)"
+  count="$(curl -s "$E2E_BRIDGE_URL/api/session/$SID/message" | jq '[.data[] | select(.type == "user")] | length' 2>/dev/null || true)"
   # The queued second prompt must appear exactly once in history (the
   # duplicate-user-card regression made it appear twice); the first prompt is
   # the other user message.

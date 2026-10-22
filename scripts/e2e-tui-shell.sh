@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Official OpenCode TUI shell-mode regression.  `!` is a TUI key binding that
-# submits POST /session/:id/shell; it must execute through Agent maintenance
+# submits POST /api/session/:id/shell; it must execute through Agent maintenance
 # and the owned OS shell process, rendering one tool card without an LLM turn.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -37,21 +37,21 @@ echo "== create a dsh session before attaching the TUI =="
 E2E_ACTIVE_SESSION="dsh-oc-issue4-shell-seed-$$"
 e2e_start_dsh "$E2E_ACTIVE_SESSION"
 e2e_wait_bridge_url
-SESSION="$(curl -s "$E2E_BRIDGE_URL/session" -X POST -H 'Content-Type: application/json' -d '{}' | jq -er '.id')"
+SESSION="$(curl -s "$E2E_BRIDGE_URL/api/session" -X POST -H 'Content-Type: application/json' -d '{}' | jq -er '.data.id')"
 echo "  session: $SESSION"
-curl -s -X POST "$E2E_BRIDGE_URL/session/$SESSION/message" \
+curl -s -X POST "$E2E_BRIDGE_URL/api/session/$SESSION/message" \
   -H 'Content-Type: application/json' \
   -d '{"parts":[{"type":"text","text":"shell e2e seed"}]}' \
-  | jq -e '.info.role == "assistant"' >/dev/null
+  | jq -e '.data.sessionID != null' >/dev/null
 deadline=$((SECONDS + 45))
 while (( SECONDS < deadline )); do
-  if curl -s "$E2E_BRIDGE_URL/session/$SESSION/message" \
+  if curl -s "$E2E_BRIDGE_URL/api/session/$SESSION/message" \
     | jq -e 'any(.. | objects; (.text // "") | contains("mock response recovered"))' >/dev/null 2>&1; then
     break
   fi
   sleep 1
 done
-if ! curl -s "$E2E_BRIDGE_URL/session/$SESSION/message" \
+if ! curl -s "$E2E_BRIDGE_URL/api/session/$SESSION/message" \
   | jq -e 'any(.. | objects; (.text // "") | contains("mock response recovered"))' >/dev/null 2>&1; then
   echo "e2e: seed reply not persisted before TUI attach" >&2
   exit 1
@@ -62,7 +62,7 @@ E2E_ACTIVE_SESSION=""
 e2e_tui_start "--session $SESSION"
 e2e_tui_wait_attach
 TUI_URL="$E2E_BRIDGE_URL"
-LLM_REPLY_COUNT_BEFORE="$(curl -s "$TUI_URL/session/$SESSION/message" | grep -o 'mock response recovered' | wc -l | tr -d ' ')"
+LLM_REPLY_COUNT_BEFORE="$(curl -s "$TUI_URL/api/session/$SESSION/message" | grep -o 'mock response recovered' | wc -l | tr -d ' ')"
 
 echo "== submit ! shell command =="
 deadline=$((SECONDS + 45))
@@ -97,7 +97,7 @@ tmux send-keys -t "$E2E_TUI_SESSION" Enter
 SHELL_CARD=""
 deadline=$((SECONDS + 60))
 while (( SECONDS < deadline )); do
-  SHELL_CARD="$(curl -s "$TUI_URL/session/$SESSION/message" | jq -c '[.. | objects | select(.type == "tool" and .tool == "bash") ] | last // {}' 2>/dev/null || true)"
+  SHELL_CARD="$(curl -s "$TUI_URL/api/session/$SESSION/message" | jq -c '[.. | objects | select(.type == "tool" and .tool == "bash") ] | last // {}' 2>/dev/null || true)"
   if jq -e '.state.status == "completed" and ((.state.output // "") | contains("DSH_OC_SHELL_OK"))' <<<"$SHELL_CARD" >/dev/null 2>&1; then
     break
   fi
@@ -115,9 +115,9 @@ if ! jq -e '.state.status == "completed" and ((.state.output // "") | contains("
   exit 1
 fi
 echo "  shell card completed in API history via the owned OS shell process"
-BASH_CARD_COUNT="$(curl -s "$TUI_URL/session/$SESSION/message" | jq '[.. | objects | select(.type == "tool" and .tool == "bash")] | length')"
+BASH_CARD_COUNT="$(curl -s "$TUI_URL/api/session/$SESSION/message" | jq '[.. | objects | select(.type == "tool" and .tool == "bash")] | length')"
 [[ "$BASH_CARD_COUNT" == 1 ]] || { echo "e2e: expected exactly one bash card, got $BASH_CARD_COUNT" >&2; exit 1; }
-LLM_REPLY_COUNT_AFTER="$(curl -s "$TUI_URL/session/$SESSION/message" | grep -o 'mock response recovered' | wc -l | tr -d ' ')"
+LLM_REPLY_COUNT_AFTER="$(curl -s "$TUI_URL/api/session/$SESSION/message" | grep -o 'mock response recovered' | wc -l | tr -d ' ')"
 [[ "$LLM_REPLY_COUNT_AFTER" == "$LLM_REPLY_COUNT_BEFORE" ]] || {
   echo "e2e: shell unexpectedly triggered an LLM turn ($LLM_REPLY_COUNT_BEFORE -> $LLM_REPLY_COUNT_AFTER)" >&2
   exit 1
@@ -143,7 +143,7 @@ tmux send-keys -t "$E2E_TUI_SESSION" Enter
 FOLLOWUP_HINT=""
 deadline=$((SECONDS + 60))
 while (( SECONDS < deadline )); do
-  FOLLOWUP_COUNT="$(curl -s "$TUI_URL/session/$SESSION/message" | grep -o 'mock response recovered' | wc -l | tr -d ' ')"
+  FOLLOWUP_COUNT="$(curl -s "$TUI_URL/api/session/$SESSION/message" | grep -o 'mock response recovered' | wc -l | tr -d ' ')"
   if [[ "$FOLLOWUP_COUNT" == "$((LLM_REPLY_COUNT_BEFORE + 1))" ]]; then
     FOLLOWUP_HINT="follow-up model turn completed"
     break

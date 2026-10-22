@@ -43,11 +43,11 @@ e2e_tui_wait_attach
 wait_tui_ready
 echo "  TUI ready"
 
-AGENTS="$(curl -s "$E2E_BRIDGE_URL/agent")"
-FIRST="$(jq -r '.[0].name // empty' <<<"$AGENTS")"
-SECOND="$(jq -r '.[1].name // empty' <<<"$AGENTS")"
+AGENTS="$(curl -s "$E2E_BRIDGE_URL/api/agent")"
+FIRST="$(jq -r '.data[0].id // empty' <<<"$AGENTS")"
+SECOND="$(jq -r '.data[1].id // empty' <<<"$AGENTS")"
 if [[ -z "$FIRST" || -z "$SECOND" || "$FIRST" == "$SECOND" ]]; then
-  echo "e2e: need at least two agents from /agent (got: $FIRST, $SECOND)" >&2
+  echo "e2e: need at least two agents from /api/agent (got: $FIRST, $SECOND)" >&2
   echo "$AGENTS" >&2
   exit 1
 fi
@@ -61,7 +61,7 @@ tmux send-keys -t "$E2E_TUI_SESSION" "e2e agent tab check" Enter
 SID=""
 deadline=$((SECONDS + 30))
 while (( SECONDS < deadline )); do
-  SID="$(curl -s "$E2E_BRIDGE_URL/session" | jq -r '.[0].id // empty' 2>/dev/null || true)"
+  SID="$(curl -s "$E2E_BRIDGE_URL/api/session" | jq -r '.[0].id // empty' 2>/dev/null || true)"
   if [[ -n "$SID" ]]; then break; fi
   sleep 1
 done
@@ -73,7 +73,7 @@ echo "  session $SID"
 
 deadline=$((SECONDS + 60))
 while (( SECONDS < deadline )); do
-  text="$(curl -s "$E2E_BRIDGE_URL/session/$SID/message" | jq -r '[.. | objects | select(has("text")) | .text] | join(" ")' 2>/dev/null || true)"
+  text="$(curl -s "$E2E_BRIDGE_URL/api/session/$SID/message" | jq -r '[.. | objects | select(has("text")) | .text] | join(" ")' 2>/dev/null || true)"
   if [[ "$text" == *"e2e agent tab check"* && "$text" == *"mock response recovered"* ]]; then
     break
   fi
@@ -84,7 +84,7 @@ if [[ "$text" != *"mock response recovered"* ]]; then
   exit 1
 fi
 
-SESSION_AGENT="$(curl -s "$E2E_BRIDGE_URL/session" | jq -r --arg id "$SID" '.[] | select(.id == $id) | .agent // empty' 2>/dev/null || true)"
+SESSION_AGENT="$(curl -s "$E2E_BRIDGE_URL/api/session" | jq -r --arg id "$SID" '.[] | select(.id == $id) | .agent // empty' 2>/dev/null || true)"
 echo "  session agent after Tab + submit: ${SESSION_AGENT:-<unset>}"
 if [[ -z "$SESSION_AGENT" || "$SESSION_AGENT" == "$FIRST" ]]; then
   echo "e2e: Tab switch did not reach the dsh session (still $FIRST)" >&2

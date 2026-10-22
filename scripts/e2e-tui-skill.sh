@@ -19,7 +19,7 @@ trap cleanup EXIT
 
 e2e_new_run "tui-skill" "danger-full-access" "success" "1"
 
-echo "== boot real opencode attach with a fake skill =="
+echo "== boot real opencode TUI with a fake skill =="
 e2e_tui_start "" "DSH_OC_E2E_FAKE_SKILLS=code-review"
 e2e_tui_wait_attach
 
@@ -49,8 +49,9 @@ tmux send-keys -t "$E2E_TUI_SESSION" Enter
 SKILL_HINT=""
 deadline=$((SECONDS + 60))
 while (( SECONDS < deadline )); do
-  for sid in $(curl -s "$E2E_BRIDGE_URL/session" | jq -r '.[].id'); do
-    local_text="$(curl -s "$E2E_BRIDGE_URL/session/$sid/message" | jq -r '[.. | objects | select(has("text")) | .text] | join(" ")' 2>/dev/null || true)"
+  for sid in $(curl -s "$E2E_BRIDGE_URL/api/session" | jq -r '.data[].id'
+); do
+    local_text="$(curl -s "$E2E_BRIDGE_URL/api/session/$sid/message" | jq -r '[.. | objects | select(has("text")) | .text] | join(" ")' 2>/dev/null || true)"
     if [[ "$local_text" == *"code-review"* && "$local_text" == *"mock response recovered"* ]]; then
       SKILL_HINT="code-review + mock reply"
       break 2
@@ -65,10 +66,12 @@ while (( SECONDS < deadline )); do
 done
 if [[ -z "$SKILL_HINT" ]]; then
   echo "e2e: /code-review did not produce a model turn" >&2
-  echo "e2e: sessions: $(curl -s "$E2E_BRIDGE_URL/session" | jq -r '.[].id')" >&2
-  for sid in $(curl -s "$E2E_BRIDGE_URL/session" | jq -r '.[].id'); do
+  echo "e2e: sessions: $(curl -s "$E2E_BRIDGE_URL/api/session" | jq -r '.data[].id'
+)" >&2
+  for sid in $(curl -s "$E2E_BRIDGE_URL/api/session" | jq -r '.data[].id'
+); do
     echo "--- $sid" >&2
-    curl -s "$E2E_BRIDGE_URL/session/$sid/message" | jq -r '[.. | objects | select(has("text")) | .text] | join(" ")' 2>/dev/null | head -c 400 >&2 || true
+    curl -s "$E2E_BRIDGE_URL/api/session/$sid/message" | jq -r '[.. | objects | select(has("text")) | .text] | join(" ")' 2>/dev/null | head -c 400 >&2 || true
     echo >&2
   done
   e2e_tui_capture "$E2E_RUN_DIR/tui-skill-fail.txt"

@@ -14,7 +14,7 @@ import {
 import { InteractionState } from '../src/bridge/state.js'
 import { createBridgeRouter, hostSessionAddedEvents } from '../src/bridge/router.js'
 import { startBridgeServer, type BridgeServerHandle } from '../src/bridge/http.js'
-import { SseHub } from '../src/bridge/sse.js'
+import { SseHub, toWireEvent } from '../src/bridge/sse.js'
 import type { BridgeFrame } from '../src/bridge/dsh-types.js'
 import { fakeApi, makeAssistantEvent, makeUserEvent, okRpc, sessionEvent } from './helpers.js'
 
@@ -1189,7 +1189,8 @@ describe('bridge events: session event mapping', () => {
           message: {
             id: 't1' as never,
             role: 'user',
-            content: [{ type: 'tool-result', toolCallId: 'c1' as never, content: [{ type: 'text', text: 'done' }] }],
+            toolCallId: 'c1' as never,
+            content: [{ type: 'text', text: 'done' }],
             source: { kind: 'tool', callId: 'c1' as never },
           },
         }, 4, 150),
@@ -1292,11 +1293,8 @@ describe('bridge events: session event mapping', () => {
           message: {
             id: 't1' as never,
             role: 'user',
-            content: [{
-              type: 'tool-result',
-              toolCallId: 'c1' as never,
-              content: [{ type: 'text', text: 'hello' }],
-            }],
+            toolCallId: 'c1' as never,
+            content: [{ type: 'text', text: 'hello' }],
             source: { kind: 'tool', callId: 'c1' as never },
           },
         }, 5, 150),
@@ -3279,7 +3277,7 @@ describe('bridge events: SSE connection lifecycle', () => {
       payload: { id: 'e3', type: 'message.updated', properties: { sessionID: 's1', text: 'z'.repeat(10) }, data: {} },
     } satisfies BridgeGlobalEvent
     const wireBytes = (item: BridgeGlobalEvent): number =>
-      Buffer.byteLength(`id: ${item.payload.id}\ndata: ${JSON.stringify(item)}\n\n`)
+      Buffer.byteLength(`id: ${item.payload.id}\ndata: ${JSON.stringify(toWireEvent(item))}\n\n`)
     const hub = new SseHub(() => {}, {
       maxReplayEvents: 10,
       maxReplayBytes: wireBytes(e2) + wireBytes(e3) + 1,
@@ -3330,7 +3328,7 @@ describe('bridge events: SSE connection lifecycle', () => {
     const server = await startBridgeServer(router)
     servers.push(server)
     const controller = new AbortController()
-    const response = await fetch(server.url + '/global/event', { signal: controller.signal })
+    const response = await fetch(server.url + '/api/event', { signal: controller.signal })
     const reader = response.body?.getReader()
     const decoder = new TextDecoder()
     let text = ''
@@ -3359,8 +3357,8 @@ describe('bridge events: SSE connection lifecycle', () => {
     servers.push(server)
     const filteredController = new AbortController()
     const globalController = new AbortController()
-    const filtered = await fetch(`${server.url}/global/event?sessionID=s1`, { signal: filteredController.signal })
-    const global = await fetch(`${server.url}/global/event`, { signal: globalController.signal })
+    const filtered = await fetch(`${server.url}/api/event?sessionID=s1`, { signal: filteredController.signal })
+    const global = await fetch(`${server.url}/api/event`, { signal: globalController.signal })
     const filteredReader = filtered.body!.getReader()
     const globalReader = global.body!.getReader()
     const decoder = new TextDecoder()
@@ -3385,7 +3383,7 @@ describe('bridge events: SSE connection lifecycle', () => {
     filteredController.abort()
     globalController.abort()
     const reconnectController = new AbortController()
-    const reconnect = await fetch(`${server.url}/global/event?sessionID=s1`, { signal: reconnectController.signal })
+    const reconnect = await fetch(`${server.url}/api/event?sessionID=s1`, { signal: reconnectController.signal })
     const reconnectReader = reconnect.body!.getReader()
     const reconnectText = decoder.decode((await reconnectReader.read()).value ?? new Uint8Array())
     expect(reconnectText).not.toContain('q-s1')
@@ -3399,7 +3397,7 @@ describe('bridge events: SSE connection lifecycle', () => {
     const server = await startBridgeServer(router)
     servers.push(server)
     const firstController = new AbortController()
-    const first = await fetch(`${server.url}/global/event?sessionID=s1`, { signal: firstController.signal })
+    const first = await fetch(`${server.url}/api/event?sessionID=s1`, { signal: firstController.signal })
     const firstReader = first.body!.getReader()
     const decoder = new TextDecoder()
     let firstText = ''
@@ -3411,7 +3409,7 @@ describe('bridge events: SSE connection lifecycle', () => {
     expect(firstText).toContain('"type":"busy"')
 
     const secondController = new AbortController()
-    const second = await fetch(`${server.url}/global/event?sessionID=s1`, { signal: secondController.signal })
+    const second = await fetch(`${server.url}/api/event?sessionID=s1`, { signal: secondController.signal })
     const secondReader = second.body!.getReader()
     let secondText = ''
     while (!secondText.includes('"type":"busy"')) {
@@ -3428,7 +3426,7 @@ describe('bridge events: SSE connection lifecycle', () => {
     await new Promise((resolve) => setTimeout(resolve, 0))
 
     const reconnectController = new AbortController()
-    const reconnect = await fetch(`${server.url}/global/event?sessionID=s1`, { signal: reconnectController.signal })
+    const reconnect = await fetch(`${server.url}/api/event?sessionID=s1`, { signal: reconnectController.signal })
     const reconnectReader = reconnect.body!.getReader()
     let reconnectText = ''
     while (!reconnectText.includes('"type":"idle"')) {
@@ -3446,7 +3444,7 @@ describe('bridge events: SSE connection lifecycle', () => {
     const server = await startBridgeServer(router)
     servers.push(server)
     const firstController = new AbortController()
-    const first = await fetch(`${server.url}/global/event`, {
+    const first = await fetch(`${server.url}/api/event`, {
       signal: firstController.signal,
     })
     const firstReader = first.body!.getReader()
@@ -3483,7 +3481,7 @@ describe('bridge events: SSE connection lifecycle', () => {
     })
 
     const reconnectController = new AbortController()
-    const reconnect = await fetch(`${server.url}/global/event`, {
+    const reconnect = await fetch(`${server.url}/api/event`, {
       signal: reconnectController.signal,
       headers: { 'Last-Event-ID': lastEventId! },
     })
@@ -3519,7 +3517,7 @@ describe('bridge events: SSE connection lifecycle', () => {
     servers.push(server)
 
     const controller = new AbortController()
-    const response = await fetch(server.url + '/global/event', { signal: controller.signal })
+    const response = await fetch(server.url + '/api/event', { signal: controller.signal })
     expect(response.headers.get('content-type')).toContain('text/event-stream')
     const reader = response.body?.getReader()
     const decoder = new TextDecoder()
@@ -3548,7 +3546,7 @@ describe('bridge events: SSE connection lifecycle', () => {
     servers.push(server)
 
     const controller = new AbortController()
-    const response = await fetch(server.url + '/global/event', { signal: controller.signal })
+    const response = await fetch(server.url + '/api/event', { signal: controller.signal })
     const reader = response.body?.getReader()
     const decoder = new TextDecoder()
     let text = ''
@@ -3575,7 +3573,7 @@ describe('bridge events: SSE connection lifecycle', () => {
     servers.push(server)
 
     const controller = new AbortController()
-    const response = await fetch(server.url + '/global/event', { signal: controller.signal })
+    const response = await fetch(server.url + '/api/event', { signal: controller.signal })
     const reader = response.body?.getReader()
     const decoder = new TextDecoder()
     let text = ''
@@ -3595,12 +3593,12 @@ describe('bridge events: SSE connection lifecycle', () => {
     const id = /"type":"permission\.asked".*?"id":"([^"]+)"/s.exec(text)?.[1] ?? ''
     expect(id).toBeTruthy()
 
-    const reply = await fetch(server.url + `/permission/${id}/reply`, {
+    const reply = await fetch(server.url + `/api/session/s1/permission/${id}/reply`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ reply: 'always' }),
     })
-    expect(reply.status).toBe(200)
+    expect(reply.status).toBe(204)
 
     const saved = await (await fetch(server.url + '/api/permission/saved')).json() as {
       data: Array<{ id: string; sessionID: string; action: string; resource: string }>
@@ -3651,7 +3649,7 @@ describe('bridge events: SSE connection lifecycle', () => {
     servers.push(server)
 
     const controller = new AbortController()
-    const response = await fetch(server.url + '/global/event', { signal: controller.signal })
+    const response = await fetch(server.url + '/api/event', { signal: controller.signal })
     const reader = response.body?.getReader()
     const decoder = new TextDecoder()
     let text = ''
@@ -3691,7 +3689,7 @@ describe('bridge events: SSE connection lifecycle', () => {
     }
 
     const controller = new AbortController()
-    const response = await fetch(server.url + '/global/event', { signal: controller.signal })
+    const response = await fetch(server.url + '/api/event', { signal: controller.signal })
     const reader = response.body?.getReader()
     const decoder = new TextDecoder()
     let text = ''
@@ -3706,11 +3704,22 @@ describe('bridge events: SSE connection lifecycle', () => {
       if (done) break
     }
     expect(text).toContain('permission.asked')
-    const asked = (text.match(/permission\.asked/g) ?? []).length
-    expect(asked).toBe(1)
+    // The wire carries the 2.x envelope next to the 1.18.18 wrapper, so the
+    // event is counted by its top-level type, not by a raw text match.
+    const asked = text
+      .split('\n\n')
+      .flatMap((chunk) => {
+        const line = chunk.split('\n').find((item) => item.startsWith('data: '))
+        if (line === undefined) return []
+        try { return [JSON.parse(line.slice(6)) as { type?: string }] } catch { return [] }
+      })
+      .filter((event) => event.type === 'permission.asked')
+    expect(asked).toHaveLength(1)
 
-    const pending = await (await fetch(server.url + '/permission')).json() as unknown[]
-    expect(pending).toHaveLength(1)
+    const pending = await (await fetch(server.url + '/api/permission/request')).json() as {
+      data: unknown[]
+    }
+    expect(pending.data).toHaveLength(1)
     controller.abort()
   })
 })

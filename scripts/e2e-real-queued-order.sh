@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Real-model queued-order repro (LOCAL, manual): drives the known edge case
-# with the real DeepSeek API and the official opencode 1.18.18 TUI:
+# with the real DeepSeek API and the official opencode 2.1.0 TUI:
 #   tool-call turn -> tool result -> model keeps streaming a long follow-up
 #   -> second prompt queued from the keyboard mid-stream
 # Records the wire-level evidence (whether follow-up deltas arrive after the
@@ -88,9 +88,9 @@ wait_ready() {
 wait_idle() {
   local deadline=$((SECONDS + 300))
   while (( SECONDS < deadline )); do
-    local st
-    st="$(curl -s "$E2E_BRIDGE_URL/session/status" | jq -r --arg s "$SID" '.[$s].type // "idle"')"
-    if [[ "$st" == "idle" ]]; then return 0; fi
+    local code
+    code="$(curl -s -m 40 -o /dev/null -w '%{http_code}' -X POST "$E2E_BRIDGE_URL/api/session/$SID/wait")"
+    if [[ "$code" == "204" ]]; then return 0; fi
     sleep 2
   done
   return 1
@@ -104,7 +104,7 @@ echo "  TUI ready"
 
 # Record the full bridge SSE from before the first prompt so the trace is
 # complete enough for raw replay on the minimal server.
-curl -sN --max-time 300 "$E2E_BRIDGE_URL/global/event" \
+curl -sN --max-time 300 "$E2E_BRIDGE_URL/api/event" \
   > "$E2E_RUN_DIR/trace.raw" 2>/dev/null &
 SSE_PID=$!
 
@@ -112,7 +112,7 @@ tmux send-keys -t "$E2E_TUI_SESSION" 'real order repro: 先运行 ls 列出当�
 SID=""
 deadline=$((SECONDS + 30))
 while (( SECONDS < deadline )); do
-  SID="$(curl -s "$E2E_BRIDGE_URL/session" | jq -r '.[0].id // empty' 2>/dev/null || true)"
+  SID="$(curl -s "$E2E_BRIDGE_URL/api/session" | jq -r '.[0].id // empty' 2>/dev/null || true)"
   if [[ -n "$SID" ]]; then break; fi
   sleep 1
 done
@@ -207,7 +207,7 @@ if ! jq -e '
 fi
 echo "  final graph: users=$USER_COUNT tools=$TOOL_COUNT, no duplicate ids"
 
-printf 'scenario=real-queued-followup\nopencode=1.18.18\nwire_follow_after_queued=%s\nqueued_event_seq=%s\nfirst_follow_seq=%s\nframes=%s\nusers=%s\ntools=%s\n' \
+printf 'scenario=real-queued-followup\nopencode=2.1.0\nwire_follow_after_queued=%s\nqueued_event_seq=%s\nfirst_follow_seq=%s\nframes=%s\nusers=%s\ntools=%s\n' \
   "$FOLLOW_AFTER_QUEUED" "${QUEUED_EVENT_SEQ:-na}" "${FIRST_FOLLOW_SEQ:-na}" "$FRAME_COUNT" "$USER_COUNT" "$TOOL_COUNT" \
   > "$E2E_RUN_DIR/order.txt"
 echo "  evidence saved: $E2E_RUN_DIR/order.txt, trace.raw, tui-frame-*.txt"

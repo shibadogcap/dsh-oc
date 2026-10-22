@@ -1,6 +1,5 @@
-import type { Todo } from '@opencode-ai/sdk/client'
 import { stableId } from './common.js'
-import { convertTodos } from './todo.js'
+import { convertTodos, type Todo } from './todo.js'
 
 interface GoalSnapshotLike {
   id?: unknown
