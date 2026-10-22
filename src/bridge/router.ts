@@ -945,12 +945,38 @@ export async function modelGroupsForClients(ctx: BridgeRouteContext): Promise<Mo
   const groups = await modelGroups(ctx)
   if (groups.length > 0) return groups
   const fallback = await modelCatalogDefault(ctx)
-  if (fallback === undefined) return groups
+  if (fallback === undefined) {
+    warnEmptyCatalogOnce(ctx, undefined)
+    return groups
+  }
+  // dsh lists a provider's models only when the provider has a usable
+  // credential, so an empty catalog with a configured default means the
+  // provider's key is missing. Say so once, with the provider named: the
+  // clients show "no model selected" and the operator needs the reason.
+  warnEmptyCatalogOnce(ctx, fallback)
   return [{
     id: fallback.provider,
     name: externalProviderName(fallback.provider),
     models: [{ id: fallback.model, name: displayModelName(fallback.model) }],
   }]
+}
+
+/** Log the empty-catalog diagnosis once per bridge run. */
+function warnEmptyCatalogOnce(
+  ctx: BridgeRouteContext,
+  fallback: { provider: string; model: string } | undefined,
+): void {
+  if (ctx.state.emptyCatalogLogged) return
+  ctx.state.emptyCatalogLogged = true
+  const target = fallback === undefined
+    ? 'no default model is configured'
+    : `the default model is ${fallback.provider}/${fallback.model}`
+  ctx.log(
+    `[bridge/model] the model catalog is empty (${target}). `
+    + 'dsh lists a provider\'s models only when the provider has a usable credential: '
+    + 'set the provider\'s API key (for example via the profile\'s apiKeyEnv, or DEEPSEEK_API_KEY) '
+    + 'and restart dsh.',
+  )
 }
 
 interface PromptPartInput {

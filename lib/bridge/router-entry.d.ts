@@ -8217,6 +8217,8 @@ declare class InteractionState {
   }>;
   /** Real durable titles learned from history projections / title events. */
   readonly sessionTitles: Map<string, string>;
+  /** Whether the empty model catalog was already reported once. */
+  emptyCatalogLogged: boolean;
   /** Last known agent preset per session (survives title/projection updates). */
   private readonly sessionAgents;
   /** One stale editor-agent value to suppress after an explicit /preset switch. */

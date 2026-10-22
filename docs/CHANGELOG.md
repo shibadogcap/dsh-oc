@@ -6,6 +6,18 @@
 
 ## [Unreleased]
 
+- 修复“模型已配置但客户端无法选择”：dsh 只有在 provider 有可用凭证时才列举模型，
+  凭证缺失时 `/api/model` 为空，按目录解析模型选择的客户端（TUI）会停在
+  “No provider selected”并进入 dsh 不使用的 OpenCode provider 连接流程。bridge
+  现在在目录为空时发布 dsh 配置中的默认模型（`/api/model`、`/api/provider`、
+  `/api/model/default`），`/api/config` 返回带 `model` 与 `default_agent` 的
+  配置文档，带模型的 `POST /api/session` 不再因模型不可路由而整体失败，
+  模型切换失败时点名缺少的凭证，目录为空的原因在启动时记录一次。
+  配置方法见 [COMPAT.md](COMPAT.md) 的「モデル（provider）の設定」。
+- TUI 品牌插件改为 2.1.0 的真实插件 API。旧插件按 1.x 写法导出函数，加载时报
+  `Invalid V2 TUI plugin module`；2.1.0 把 slot 树放在 `context.ui.slot`，并且
+  没有首页 logo 的 slot（首页 logo 由 TUI 自己渲染），因此 `DSH ⨯ OC` 与副标题
+  落在 `home.footer`。插件 `package.json` 同时提供 `"."` 与 `"./tui"` 入口。
 - 官方 OpenCode Web UI 改为由 bridge 自己提供，与 API 同一个源。官方 opencode
   二进制把 Web UI 打成一段 `AppArchive`（小端 u32 的 JSON 索引长度 + 索引 +
   brotli 压缩的资产本体），bridge 启动时解一次到

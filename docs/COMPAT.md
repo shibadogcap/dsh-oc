@@ -142,3 +142,61 @@ Node HTTP サーバでも同じ症状になり、完了する応答（`GET /api/
 つまりブラウザレベルの E2E は、この環境で使える Obscura では実施できない。
 dsh-oc の制約でも OpenChamber 側の制約でもなく、手元のツールの制約である。API 経路は
 `scripts/e2e-openchamber-bootstrap.mjs` で検証する。
+
+## モデル（provider）の設定
+
+dsh は provider に**使える資格情報があるときだけ**そのモデルを列挙する。資格情報が
+無いと `/api/model` は空になり、モデルをカタログに対して解決するクライアント
+（TUI がそう）は「モデル未選択」のまま OpenCode の provider 接続フローに落ちる。
+dsh-oc はこのフローを使わないので、その画面からは復帰できない。
+
+ブリッジ側の受け皿:
+
+- カタログが空でも、dsh の設定にある既定モデルを `/api/model`・`/api/provider`・
+  `/api/model/default` に出す（モデル名は見えるが、呼ぶには資格情報が要る）。
+- `/api/config` に `{ type: "document", info: { model, default_agent } }` を返す
+  （TUI はここから既定モデルと agent を読む）。
+- モデルを指定した `POST /api/session` が失敗してもセッションは作る。本当の
+  エラーはプロンプト時に出る。
+- モデル切り替えが `session/model-unavailable` で失敗したら、どのキーを設定すべきか
+  までメッセージに含める。
+- カタログが空の理由は起動中 1 回だけログに出す（`[bridge/model] the model catalog
+  is empty (...)`）。
+
+dsh-oc の profile は `dsh-base` の既定（`deepseek-official` + `DEEPSEEK_API_KEY`）を
+そのまま使う。別の provider を使うなら profile の `cordis.patch.yml` に
+`llm-pi-ai` と `agent-default-model` を書く。実例（キーは
+`~/.dsh/.credentials.yaml` の `refs` に置く。値は表示しない）:
+
+```yaml
+- id: llm-pi-ai
+  name: "@deepseek-ai/dsh-llm-pi-ai"
+  config:
+    providers:
+      opencode-go:
+        apiKeyEnv: OPENCODE_GO_API_KEY
+- id: agent-default-model
+  name: "@deepseek-ai/dsh-agent-default-model"
+  config:
+    provider: opencode-go
+    model: deepseek-v4.1-flash
+    reasoningEffort: high
+```
+
+`@deepseek-ai/dsh-llm-pi-ai` は profile に入れる:
+
+```bash
+dsh plugin --profile oc add @deepseek-ai/dsh-llm-pi-ai@0.2.1-rc.2
+```
+
+pnpm 12 が `ERR_PNPM_IGNORED_BUILDS` で止まる場合（推移依存にビルドスクリプトが
+ある）、そのパッケージのスクリプトを明示的に拒否して入れる:
+
+```bash
+cd ~/.dsh/profiles/oc
+pnpm add @deepseek-ai/dsh-llm-pi-ai@0.2.1-rc.2 \
+  --allow-build='!@google/genai' --allow-build='!protobufjs'
+```
+
+確認は `/api/model` の件数、`/api/model/default` の `id`、TUI ホーム下部の
+`Minimal · <モデル名> <provider>` 表示。
